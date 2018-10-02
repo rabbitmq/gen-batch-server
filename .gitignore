@@ -13,3 +13,5 @@ doc
 logs
 *.d
 ebin/
+_build
+rebar.lock

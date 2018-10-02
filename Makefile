@@ -1,13 +1,9 @@
 PROJECT = gen_batch_server
 PROJECT_DESCRIPTION = Generic batching server
 PROJECT_VERSION = 0.5.0-pre.1
-PROJECT_MOD = aten_app
 
 define PROJECT_ENV
 [
-	{poll_interval, 1000},
-	{heartbeat_interval, 100},
-	{detection_threshold, 0.99}
 ]
 endef
 
