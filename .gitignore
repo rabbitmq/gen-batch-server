@@ -8,3 +8,8 @@ ebin/*.beam
 rel/example_project
 .concrete/DEV_MODE
 .rebar
+.erlang.mk
+doc
+logs
+*.d
+ebin/
