@@ -25,7 +25,11 @@ some resource (such as a `dets` table) that doesn't handle casts.
 
 ## Usage
 
-#### `start_link(Name, Mod, Args) -> Result.`
+#### `start_link(Name, Mod, Args) -> Result`
+
+ok
+
+
 #### `start_link(Name, Mod, Args, Opts) -> Result`
 
     Types:
@@ -40,7 +44,7 @@ some resource (such as a `dets` table) that doesn't handle casts.
 Creates a `gen_batch_server` as part of a supervision tree.
 
 
-#### cast(ServerRef, Request) -> ok.
+#### `cast(ServerRef, Request) -> ok`
 
     Types:
         ServerRef = pid() | {Name :: atom(), node()} | Name :: atom()
@@ -52,8 +56,8 @@ request tuple (`{cast, Pid, Request}`) included in the list of operations
 passed to `Module:handle_batch/2`.
 
 
-#### call(ServerRef, Request) -> Reply.
-#### call(ServerRef, Request, Timeout) -> Reply.
+#### `call(ServerRef, Request) -> Reply.`
+#### `call(ServerRef, Request, Timeout) -> Reply.`
 
     Types:
         ServerRef = pid() | {Name :: atom(), node()} | Name :: atom()
@@ -65,7 +69,7 @@ Sends an synchronous request to the `gen_batch_server returning` returning the
 response provided for the operation by `Module:handle_batch/2`. The timeout
 is optional and defaults to 5000ms.
 
-#### Module:init(Args) -> Result.
+#### `Module:init(Args) -> Result.`
 
     Types:
         Args = term()
@@ -77,7 +81,7 @@ is optional and defaults to 5000ms.
 Called whenever a `gen_batch_server` is started with the arguments provided
 to `start_link/4`.
 
-#### Module:handle_batch(Batch, State) -> Result.
+#### `Module:handle_batch(Batch, State) -> Result.`
 
     Types:
         Batch = [Op]
