@@ -23,10 +23,10 @@ processes and writes them to an external service. It could also be beneficial
 to use `gen_batch_server` to proxy a bunch processes that want to update
 some resource (such as a `dets` table) that doesn't handle casts.
 
-### Usage
+## Usage
 
-#### start_link(Name, Mod, Args) -> Result.
-#### start_link(Name, Mod, Args, Opts) -> Result
+#### `start_link(Name, Mod, Args) -> Result.`
+#### `start_link(Name, Mod, Args, Opts) -> Result`
 
     Types:
         Name = {local,Name} | {global,GlobalName} | {via,Module,ViaName}
