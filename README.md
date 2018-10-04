@@ -88,16 +88,12 @@ to `start_link/4`.
         Result = {ok, State} | {ok, Actions, State} | {stop, Reason}
         State = term()
         From = {Pid :: pid(), Tag :: reference()}
-        Action = {reply, From, Msg} |
-                 {notify, pid(), Msg}
+        Action = {reply, From, Msg}
         Actions = [Action]
         Reason = term()
 
 Called whenever a new batch is ready for processing. The implementation can
-optionally return a list of actions to reply to `call` operation or notify
-the sender of a cast operation (which always includes the pid of the sender)
-that the operation has been processed. `notify` uses a cast to reply to the
-sender.
+optionally return a list of reply actions used to reply to `call` operations.
 
 #### Module:terminate(Reason, State) -> Result
 

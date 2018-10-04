@@ -47,8 +47,7 @@
 %%% Behaviour
 
 -type action() ::
-    {reply, from(), Msg :: term()} |
-    {notify, pid(), Msg :: term()}.
+    {reply, from(), Msg :: term()}.
 %% an action that can be returned from handle_batch/2
 
 -callback init(Args :: term()) ->
@@ -238,9 +237,6 @@ complete_batch(#state{batch = Batch,
         {ok, Actions, Inner} ->
             Debug = lists:foldl(fun ({reply, {Pid, Tag}, Msg}, Dbg) ->
                                         Pid ! {Tag, Msg},
-                                        handle_debug_out(Pid, Msg, Dbg);
-                                    ({notify, Pid, Msg}, Dbg) ->
-                                        Pid ! Msg,
                                         handle_debug_out(Pid, Msg, Dbg)
                                 end, Debug0, Actions),
             State0#state{batch = [],

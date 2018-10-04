@@ -123,8 +123,8 @@ cast_many(Config) ->
                 fun(Ops, State) ->
                         {cast, P,  {put, K, V}} = lists:last(Ops),
                         ct:pal("cast_many: batch size ~b~n", [length(Ops)]),
-                        {ok, [{notify, P, {done, K, V}}],
-                         maps:put(K, V, State)}
+                        P ! {done, K, V},
+                        {ok, [], maps:put(K, V, State)}
                 end),
     Num = 20000,
     [gen_batch_server:cast(Pid, {put, I, I}) || I <- lists:seq(1, Num)],
@@ -145,8 +145,8 @@ handle_batch_returns_notification(Config) ->
     Msg = {put, k, v},
     meck:expect(Mod, handle_batch,
                 fun([{cast, P, {put, k, v}}], State) ->
-                        {ok, [{notify, P, {done, k}}],
-                         maps:put(k, v, State)}
+                        P ! {done, k},
+                        {ok, maps:put(k, v, State)}
                 end),
     ok = gen_batch_server:cast(Pid, Msg),
     receive {done, k} -> ok after 2000 -> exit(timeout) end,
