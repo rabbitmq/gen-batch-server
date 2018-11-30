@@ -47,9 +47,8 @@ Creates a `gen_batch_server` as part of a supervision tree.
         Request = term()
 
 Sends an asynchronous request to the `gen_batch_server returning` `ok` immediately.
-The `pid` of the calling process will be captured and included in the
-request tuple (`{cast, Pid, Request}`) included in the list of operations
-passed to `Module:handle_batch/2`.
+The request tuple (`{cast, Request}`) is included in the list of operations passed
+to `Module:handle_batch/2`.
 
 
 #### call(ServerRef, Request) -> Reply
@@ -82,7 +81,7 @@ to `start_link/4`.
     Types:
         Batch = [Op]
         UserOp = term(),
-        Op = {cast, pid(), UserOp} |
+        Op = {cast, UserOp} |
              {call, from(), UserOp} |
              {info, UserOp}.
         Result = {ok, State} | {ok, Actions, State} | {stop, Reason}

@@ -1,4 +1,15 @@
+EPMD ?= $(shell which epmd)
+REBAR ?= $(shell which rebar3)
+
 clean:
+	$(REBAR) clean
+
+xref:
+	@$(REBAR) xref
+
+dialyzer:
+	@$(REBAR) dialyzer
 
 test: clean
-	rebar3 ct && rebar3 eunit
+	@$(EPMD) -daemon
+	@$(REBAR) ct --readable=false --sname=batch_test
