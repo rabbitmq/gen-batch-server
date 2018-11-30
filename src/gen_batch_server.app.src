@@ -1,10 +1,9 @@
-%% Copyright (c) 2018-Present Pivotal Software, Inc. All Rights Reserved.
 {application,gen_batch_server,
              [{description,"Generic batching server"},
               {licenses,["Apache","MPL"]},
               {links,[{"github",
                        "https://github.com/rabbitmq/gen-batch-server"}]},
-              {vsn,"0.5.1"},
+              {vsn,"0.6.0"},
               {modules,[gen_batch_server]},
               {registered,[]},
               {applications,[kernel,stdlib]},
