@@ -25,7 +25,6 @@ all_tests() ->
      info_calls_handle_batch,
      cast_many,
      call_calls_handle_batch,
-     handle_batch_returns_notification,
      returning_stop_calls_terminate,
      terminate_is_optional,
      sys_get_status_calls_format_status,
@@ -84,7 +83,7 @@ cast_calls_handle_batch(Config) ->
     Msg = {put, k, v},
     Self = self(),
     meck:expect(Mod, handle_batch,
-                fun([{cast, _Pid,  {put, k, v}}], State) ->
+                fun([{cast, {put, k, v}}], State) ->
                         Self ! continue,
                         {ok, [], maps:put(k, v, State)}
                 end),
@@ -127,11 +126,12 @@ cast_many(Config) ->
     meck:expect(Mod, init, fun(Init) -> {ok, Init} end),
     Args = #{},
     {ok, Pid} = gen_batch_server:start_link({local, Mod}, Mod, Args, []),
+    Self = self(),
     meck:expect(Mod, handle_batch,
                 fun(Ops, State) ->
-                        {cast, P,  {put, K, V}} = lists:last(Ops),
+                        {cast, {put, K, V}} = lists:last(Ops),
                         ct:pal("cast_many: batch size ~b~n", [length(Ops)]),
-                        P ! {done, K, V},
+                        Self ! {done, K, V},
                         {ok, [], maps:put(K, V, State)}
                 end),
     Num = 20000,
@@ -141,24 +141,6 @@ cast_many(Config) ->
     after 5000 ->
               exit(timeout)
     end,
-    ?assert(meck:validate(Mod)),
-    ok.
-
-handle_batch_returns_notification(Config) ->
-    Mod = ?config(mod, Config),
-    meck:new(Mod, [non_strict]),
-    meck:expect(Mod, init, fun(Init) -> {ok, Init} end),
-    Args = #{},
-    {ok, Pid} = gen_batch_server:start_link({local, Mod}, Mod, Args, []),
-    Msg = {put, k, v},
-    meck:expect(Mod, handle_batch,
-                fun([{cast, P, {put, k, v}}], State) ->
-                        P ! {done, k},
-                        {ok, maps:put(k, v, State)}
-                end),
-    ok = gen_batch_server:cast(Pid, Msg),
-    receive {done, k} -> ok after 2000 -> exit(timeout) end,
-    ?assertEqual(true, meck:called(Mod, handle_batch, '_', Pid)),
     ?assert(meck:validate(Mod)),
     ok.
 
@@ -199,7 +181,7 @@ returning_stop_calls_terminate(Config) ->
                                             Args, []),
     Msg = {put, k, v},
     meck:expect(Mod, handle_batch,
-                fun([{cast, _, {put, k, v}}], _) ->
+                fun([{cast, {put, k, v}}], _) ->
                         {stop, because}
                 end),
     meck:expect(Mod, terminate, fun(because, S) -> S end),
@@ -226,7 +208,7 @@ terminate_is_optional(Config) ->
                                             Args, []),
     Msg = {put, k, v},
     meck:expect(Mod, handle_batch,
-                fun([{cast, _, {put, k, v}}], _) ->
+                fun([{cast, {put, k, v}}], _) ->
                         {stop, because}
                 end),
     ok = gen_batch_server:cast(Pid, Msg),

@@ -154,7 +154,7 @@ do_cast(Dest, Request) ->
   ok.
 
 cast_msg(Request) ->
-  {'$gen_cast', self(), Request}.
+  {'$gen_cast', Request}.
 
 -spec call(server_ref(), Request :: term()) -> term().
 call(Name, Request) ->
@@ -187,10 +187,10 @@ loop_wait(State0, Parent) ->
             enter_loop_batched(Msg, Parent, State0)
     end.
 
-append_msg({'$gen_cast', Pid, Msg},
+append_msg({'$gen_cast', Msg},
            #state{batch = Batch,
                   batch_count = BatchCount} = State0) ->
-    State0#state{batch = [{cast, Pid, Msg} | Batch],
+    State0#state{batch = [{cast, Msg} | Batch],
                  batch_count = BatchCount + 1};
 append_msg({'$gen_call', From, Msg},
            #state{batch = Batch,
