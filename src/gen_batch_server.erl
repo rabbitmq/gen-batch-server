@@ -18,7 +18,9 @@
 
 -type server_ref() :: pid() |
                       (LocalName :: atom()) |
-                      {Name :: atom(), Node :: atom()}.
+                      {Name :: atom(), Node :: atom()} |
+                      {'global', term()} |
+                      {'via', Module :: module(), Name :: term()}.
 
 -type from() :: {Pid :: pid(), Tag :: reference()}.
 
@@ -75,14 +77,20 @@
 %%% API
 %%%
 
--spec start_link({local, atom()}, module(), Args :: term()) ->
-    {ok, pid()} | {error, {already_started, pid()}}.
+-spec start_link(Name, Mod, Args) -> Result when
+     Name :: {local, atom()} | {global, term()} | {via, atom(), term()},
+     Mod :: module(),
+     Args :: term(),
+     Result ::  {ok,pid()} | {error, {already_started, pid()}}.
 start_link(Name, Mod, Args) ->
     gen:start(?MODULE, link, Name, Mod, Args, []).
 
--spec start_link({local, atom()}, module(), Args :: term(),
-                 Options :: list()) ->
-    {ok, pid()} | {error, {already_started, pid()}}.
+-spec start_link(Name, Mod, Args, Options) -> Result when
+     Name :: {local, atom()} | {global, term()} | {via, atom(), term()},
+     Mod :: module(),
+     Args :: term(),
+     Options :: list(),
+     Result ::  {ok,pid()} | {error, {already_started, pid()}}.
 start_link(Name, Mod, Args, Opts) ->
     gen:start(?MODULE, link, Name, Mod, Args, Opts).
 
@@ -127,12 +135,26 @@ init_it(Starter, Parent, Name0, Mod, Args, Options) ->
     end.
 
 -spec cast(server_ref(), term()) -> ok.
-cast(ServerRef, Request) ->
-    try ServerRef ! {'$gen_cast', self(), Request} of
-        _ -> ok
-    catch
-        _:_ -> ok
-    end.
+cast({global,Name}, Request) ->
+    catch global:send(Name, cast_msg(Request)),
+    ok;
+cast({via, Mod, Name}, Request) ->
+    catch Mod:send(Name, cast_msg(Request)),
+    ok;
+cast({Name,Node}=Dest, Request) when is_atom(Name), is_atom(Node) ->
+    do_cast(Dest, Request);
+cast(Dest, Request) when is_atom(Dest) ->
+    do_cast(Dest, Request);
+cast(Dest, Request) when is_pid(Dest) ->
+    do_cast(Dest, Request).
+
+
+do_cast(Dest, Request) ->
+  do_send(Dest, cast_msg(Request)),
+  ok.
+
+cast_msg(Request) ->
+  {'$gen_cast', self(), Request}.
 
 -spec call(server_ref(), Request :: term()) -> term().
 call(Name, Request) ->
@@ -297,3 +319,12 @@ format_status(_Reason, [_PDict, SysState, Parent, Debug,
 
 write_debug(Dev, Event, Name) ->
     io:format(Dev, "~p event = ~p~n", [Name, Event]).
+
+%% Send function
+
+do_send(Dest, Msg) ->
+    try erlang:send(Dest, Msg)
+    catch
+        error:_ -> ok
+    end,
+    ok.
