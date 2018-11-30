@@ -13,4 +13,4 @@ otp_release:
   - "21.0"
 
 script:
-  - rebar3 do eunit, ct, xref, dialyzer
+  - rebar3 do eunit, ct --sname test, xref, dialyzer
