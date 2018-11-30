@@ -1,3 +1,4 @@
+%% Copyright (c) 2018-Present Pivotal Software, Inc. All Rights Reserved.
 -module(gen_batch_server).
 
 -export([start_link/3,

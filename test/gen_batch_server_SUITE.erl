@@ -1,3 +1,4 @@
+%% Copyright (c) 2018-Present Pivotal Software, Inc. All Rights Reserved.
 -module(gen_batch_server_SUITE).
 
 -compile(export_all).

@@ -113,3 +113,9 @@ Optional. Called whenever a `gen_batch_server` is terminating.
 
 
 Optional. Used to provide a custom formatting of the user state.
+
+
+# Copyright
+
+(c) Pivotal Software Inc., 2018-Present.
+
