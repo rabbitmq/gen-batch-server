@@ -267,6 +267,7 @@ system_continue(Parent, Debug, State) ->
     % TODO check if we've written to the current batch or not
     loop_batched(State#state{debug = Debug}, Parent).
 
+-spec system_terminate(term(), pid(), list(), term()) -> no_return().
 system_terminate(Reason, _Parent, _Debug, State) ->
     terminate(Reason, State),
     exit(Reason).
