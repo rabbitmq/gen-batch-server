@@ -158,7 +158,6 @@ cast_batch(Config) ->
     meck:expect(Mod, handle_batch,
                 fun(Ops, State) ->
                         {cast, {put, K, V}} = lists:last(Ops),
-                        ct:pal("cast_batch: batch size ~b~n", [length(Ops)]),
                         Self ! {done, K, V},
                         {ok, [], maps:put(K, V, State)}
                 end),
