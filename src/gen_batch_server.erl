@@ -4,6 +4,8 @@
 -export([start_link/3,
          start_link/4,
          init_it/6,
+         stop/1,
+         stop/3,
          cast/2,
          cast_batch/2,
          call/2,
@@ -140,6 +142,12 @@ init_it(Starter, Parent, Name0, Mod, Args, Options) ->
             proc_lib:init_ack(Starter, {error, Error}),
             exit(Error)
     end.
+
+stop(Name) ->
+    gen:stop(Name).
+
+stop(Name, Reason, Timeout) ->
+    gen:stop(Name, Reason, Timeout).
 
 -spec cast(server_ref(), term()) -> ok.
 cast({global,Name}, Request) ->

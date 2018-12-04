@@ -31,7 +31,8 @@ all_tests() ->
      terminate_is_optional,
      sys_get_status_calls_format_status,
      format_status_is_optional,
-     max_batch_size
+     max_batch_size,
+     stop_calls_terminate
     ].
 
 groups() ->
@@ -311,6 +312,29 @@ max_batch_size(Config) ->
     ?assert(meck:validate(Mod)),
     ok.
 
+stop_calls_terminate(Config) ->
+    Mod = ?config(mod, Config),
+    %% as we are linked the test process need to also trap exits for this test
+    process_flag(trap_exit, true),
+    meck:new(Mod, [non_strict]),
+    meck:expect(Mod, init, fun(Init) ->
+                                   process_flag(trap_exit, true),
+                                   {ok, Init}
+                           end),
+    Args = #{},
+    {ok, Pid} = gen_batch_server:start_link({local, Mod}, Mod,
+                                            Args, []),
+    meck:expect(Mod, terminate, fun(because, S) -> S end),
+    ok = gen_batch_server:stop(Pid, because, infinity),
+    %% wait for process exit signal
+    receive {'EXIT', Pid, because} -> ok after 2000 -> exit(timeout) end,
+    %% sleep a little to allow meck to register results
+    timer:sleep(10),
+    ?assertEqual(true, meck:called(Mod, terminate, '_')),
+    ?assert(meck:validate(Mod)),
+    ok.
+
+%% Utility
 wait_batch() ->
     wait_batch([]).
 
@@ -323,5 +347,3 @@ wait_batch(Acc) ->
     after 5000 ->
               exit(timeout)
     end.
-
-%% Utility
