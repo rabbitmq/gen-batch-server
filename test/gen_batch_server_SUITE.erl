@@ -25,6 +25,7 @@ all_tests() ->
      cast_calls_handle_batch,
      info_calls_handle_batch,
      cast_many,
+     cast_batch,
      call_calls_handle_batch,
      returning_stop_calls_terminate,
      terminate_is_optional,
@@ -137,6 +138,30 @@ cast_many(Config) ->
                 end),
     Num = 20000,
     [gen_batch_server:cast(Pid, {put, I, I}) || I <- lists:seq(1, Num)],
+    receive {done, Num, Num} ->
+                ok
+    after 5000 ->
+              exit(timeout)
+    end,
+    ?assert(meck:validate(Mod)),
+    ok.
+
+cast_batch(Config) ->
+    Mod = ?config(mod, Config),
+    meck:new(Mod, [non_strict]),
+    meck:expect(Mod, init, fun(Init) -> {ok, Init} end),
+    Args = #{},
+    {ok, Pid} = gen_batch_server:start_link({local, Mod}, Mod, Args, []),
+    Self = self(),
+    meck:expect(Mod, handle_batch,
+                fun(Ops, State) ->
+                        {cast, {put, K, V}} = lists:last(Ops),
+                        ct:pal("cast_batch: batch size ~b~n", [length(Ops)]),
+                        Self ! {done, K, V},
+                        {ok, [], maps:put(K, V, State)}
+                end),
+    Num = 20000,
+    gen_batch_server:cast_batch(Pid, [{put, I, I} || I <- lists:seq(1, Num)]),
     receive {done, Num, Num} ->
                 ok
     after 5000 ->

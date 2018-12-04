@@ -5,6 +5,7 @@
          start_link/4,
          init_it/6,
          cast/2,
+         cast_batch/2,
          call/2,
          call/3,
          system_continue/3,
@@ -157,6 +158,30 @@ do_cast(Dest, Request) ->
 cast_msg(Request) ->
   {'$gen_cast', Request}.
 
+-spec cast_batch(server_ref(), [term()]) -> ok.
+cast_batch({global,Name}, Batch) ->
+    catch global:send(Name, cast_batch_msg(Batch)),
+    ok;
+cast_batch({via, Mod, Name}, Batch) ->
+    catch Mod:send(Name, cast_batch_msg(Batch)),
+    ok;
+cast_batch({Name,Node}=Dest, Batch) when is_atom(Name), is_atom(Node) ->
+    do_cast_batch(Dest, Batch);
+cast_batch(Dest, Batch) when is_atom(Dest) ->
+    do_cast_batch(Dest, Batch);
+cast_batch(Dest, Batch) when is_pid(Dest) ->
+    do_cast_batch(Dest, Batch).
+
+do_cast_batch(Dest, Batch) ->
+    do_send(Dest, cast_batch_msg(Batch)),
+    ok.
+
+cast_batch_msg(Msgs0) when is_list(Msgs0) ->
+    Msgs1 = [{cast, Msg} || Msg <- Msgs0],
+    {'$gen_cast_batch', lists:reverse(Msgs1), length(Msgs1)};
+cast_batch_msg(_) ->
+    erlang:error(badarg).
+
 -spec call(server_ref(), Request :: term()) -> term().
 call(Name, Request) ->
     call(Name, Request, 5000).
@@ -193,6 +218,11 @@ append_msg({'$gen_cast', Msg},
                   batch_count = BatchCount} = State0) ->
     State0#state{batch = [{cast, Msg} | Batch],
                  batch_count = BatchCount + 1};
+append_msg({'$gen_cast_batch', Msgs, Count},
+           #state{batch = Batch,
+                  batch_count = BatchCount} = State0) ->
+    State0#state{batch = Msgs ++ Batch,
+                 batch_count = BatchCount + Count};
 append_msg({'$gen_call', From, Msg},
            #state{batch = Batch,
                   batch_count = BatchCount} = State0) ->
@@ -212,8 +242,8 @@ enter_loop_batched(Msg, Parent, State0) ->
 
 loop_batched(#state{config = #config{batch_size = Written,
                                      max_batch_size = Max} = Config,
-                    batch_count = Written} = State0,
-             Parent) ->
+                    batch_count = BatchCount} = State0,
+             Parent) when BatchCount >= Written ->
     % complete batch after seeing batch_size writes
     State = complete_batch(State0),
     % grow max batch size
