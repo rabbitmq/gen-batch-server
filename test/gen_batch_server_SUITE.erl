@@ -30,7 +30,8 @@ all_tests() ->
      returning_stop_calls_terminate,
      terminate_is_optional,
      sys_get_status_calls_format_status,
-     format_status_is_optional
+     format_status_is_optional,
+     max_batch_size
     ].
 
 groups() ->
@@ -282,5 +283,45 @@ format_status_is_optional(Config) ->
     ?assertEqual(false, meck:called(Mod, format_status, '_')),
     ?assert(meck:validate(Mod)),
     ok.
+
+max_batch_size(Config) ->
+    Mod = ?config(mod, Config),
+    meck:new(Mod, [non_strict]),
+    meck:expect(Mod, init, fun(Init) -> {ok, Init} end),
+    Args = #{},
+    {ok, Pid} = gen_batch_server:start_link({local, Mod}, Mod, Args, [{max_batch_size, 5000}]),
+    Self = self(),
+    Num = 20000,
+    meck:expect(Mod, handle_batch,
+                fun(Ops, State) ->
+                        {cast, {put, K, V}} = lists:last(Ops),
+                        ct:pal("cast_batch: batch size ~b~n", [length(Ops)]),
+                        Self ! {last, K, V},
+                        case K of
+                            Num ->
+                                Self ! done;
+                            _ ->
+                                ok
+                        end,
+                        {ok, [], maps:put(K, V, State)}
+                end),
+    [gen_batch_server:cast(Pid, {put, I, I}) || I <- lists:seq(1, Num)],
+    [Num | _] = BatchResult = wait_batch(),
+    ?assert(BatchResult >= 4),
+    ?assert(meck:validate(Mod)),
+    ok.
+
+wait_batch() ->
+    wait_batch([]).
+
+wait_batch(Acc) ->
+    receive
+        {last, Num, Num} ->
+            wait_batch([Num | Acc]);
+        done ->
+            Acc
+    after 5000 ->
+              exit(timeout)
+    end.
 
 %% Utility

@@ -30,9 +30,9 @@
               {call, from(), UserOp :: term()} |
               {info, UserOp :: term()}.
 
--record(config, {batch_size = ?MIN_MAX_BATCH_SIZE :: non_neg_integer(),
-                 min_batch_size = ?MIN_MAX_BATCH_SIZE :: non_neg_integer(),
-                 max_batch_size = ?MAX_MAX_BATCH_SIZE :: non_neg_integer(),
+-record(config, {batch_size :: non_neg_integer(),
+                 min_batch_size :: non_neg_integer(),
+                 max_batch_size :: non_neg_integer(),
                  parent :: pid(),
                  name :: atom(),
                  module :: module()}).
@@ -102,12 +102,17 @@ init_it(Starter, self, Name, Mod, Args, Options) ->
 init_it(Starter, Parent, Name0, Mod, Args, Options) ->
     Name = gen:name(Name0),
     Debug = gen:debug_options(Name, Options),
+    MaxBatchSize = proplists:get_value(max_batch_size, Options, ?MAX_MAX_BATCH_SIZE),
+    MinBatchSize = proplists:get_value(min_batch_size, Options, ?MIN_MAX_BATCH_SIZE),
     case catch Mod:init(Args) of
         {ok, State0} ->
             proc_lib:init_ack(Starter, {ok, self()}),
             Conf = #config{module = Mod,
                            parent = Parent,
-                           name = Name},
+                           name = Name,
+                           batch_size = MinBatchSize,
+                           min_batch_size = MinBatchSize,
+                           max_batch_size = MaxBatchSize},
             State = #state{config = Conf,
                            state = State0,
                            debug = Debug},
