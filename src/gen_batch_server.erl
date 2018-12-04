@@ -4,7 +4,10 @@
 -export([start_link/3,
          start_link/4,
          init_it/6,
+         stop/1,
+         stop/3,
          cast/2,
+         cast_batch/2,
          call/2,
          call/3,
          system_continue/3,
@@ -29,9 +32,9 @@
               {call, from(), UserOp :: term()} |
               {info, UserOp :: term()}.
 
--record(config, {batch_size = ?MIN_MAX_BATCH_SIZE :: non_neg_integer(),
-                 min_batch_size = ?MIN_MAX_BATCH_SIZE :: non_neg_integer(),
-                 max_batch_size = ?MAX_MAX_BATCH_SIZE :: non_neg_integer(),
+-record(config, {batch_size :: non_neg_integer(),
+                 min_batch_size :: non_neg_integer(),
+                 max_batch_size :: non_neg_integer(),
                  parent :: pid(),
                  name :: atom(),
                  module :: module()}).
@@ -101,12 +104,17 @@ init_it(Starter, self, Name, Mod, Args, Options) ->
 init_it(Starter, Parent, Name0, Mod, Args, Options) ->
     Name = gen:name(Name0),
     Debug = gen:debug_options(Name, Options),
+    MaxBatchSize = proplists:get_value(max_batch_size, Options, ?MAX_MAX_BATCH_SIZE),
+    MinBatchSize = proplists:get_value(min_batch_size, Options, ?MIN_MAX_BATCH_SIZE),
     case catch Mod:init(Args) of
         {ok, State0} ->
             proc_lib:init_ack(Starter, {ok, self()}),
             Conf = #config{module = Mod,
                            parent = Parent,
-                           name = Name},
+                           name = Name,
+                           batch_size = MinBatchSize,
+                           min_batch_size = MinBatchSize,
+                           max_batch_size = MaxBatchSize},
             State = #state{config = Conf,
                            state = State0,
                            debug = Debug},
@@ -135,6 +143,12 @@ init_it(Starter, Parent, Name0, Mod, Args, Options) ->
             exit(Error)
     end.
 
+stop(Name) ->
+    gen:stop(Name).
+
+stop(Name, Reason, Timeout) ->
+    gen:stop(Name, Reason, Timeout).
+
 -spec cast(server_ref(), term()) -> ok.
 cast({global,Name}, Request) ->
     catch global:send(Name, cast_msg(Request)),
@@ -156,6 +170,30 @@ do_cast(Dest, Request) ->
 
 cast_msg(Request) ->
   {'$gen_cast', Request}.
+
+-spec cast_batch(server_ref(), [term()]) -> ok.
+cast_batch({global,Name}, Batch) ->
+    catch global:send(Name, cast_batch_msg(Batch)),
+    ok;
+cast_batch({via, Mod, Name}, Batch) ->
+    catch Mod:send(Name, cast_batch_msg(Batch)),
+    ok;
+cast_batch({Name,Node}=Dest, Batch) when is_atom(Name), is_atom(Node) ->
+    do_cast_batch(Dest, Batch);
+cast_batch(Dest, Batch) when is_atom(Dest) ->
+    do_cast_batch(Dest, Batch);
+cast_batch(Dest, Batch) when is_pid(Dest) ->
+    do_cast_batch(Dest, Batch).
+
+do_cast_batch(Dest, Batch) ->
+    do_send(Dest, cast_batch_msg(Batch)),
+    ok.
+
+cast_batch_msg(Msgs0) when is_list(Msgs0) ->
+    Msgs1 = [{cast, Msg} || Msg <- Msgs0],
+    {'$gen_cast_batch', lists:reverse(Msgs1), length(Msgs1)};
+cast_batch_msg(_) ->
+    erlang:error(badarg).
 
 -spec call(server_ref(), Request :: term()) -> term().
 call(Name, Request) ->
@@ -193,6 +231,11 @@ append_msg({'$gen_cast', Msg},
                   batch_count = BatchCount} = State0) ->
     State0#state{batch = [{cast, Msg} | Batch],
                  batch_count = BatchCount + 1};
+append_msg({'$gen_cast_batch', Msgs, Count},
+           #state{batch = Batch,
+                  batch_count = BatchCount} = State0) ->
+    State0#state{batch = Msgs ++ Batch,
+                 batch_count = BatchCount + Count};
 append_msg({'$gen_call', From, Msg},
            #state{batch = Batch,
                   batch_count = BatchCount} = State0) ->
@@ -212,8 +255,8 @@ enter_loop_batched(Msg, Parent, State0) ->
 
 loop_batched(#state{config = #config{batch_size = Written,
                                      max_batch_size = Max} = Config,
-                    batch_count = Written} = State0,
-             Parent) ->
+                    batch_count = BatchCount} = State0,
+             Parent) when BatchCount >= Written ->
     % complete batch after seeing batch_size writes
     State = complete_batch(State0),
     % grow max batch size
