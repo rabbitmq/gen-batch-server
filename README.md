@@ -32,12 +32,15 @@ some resource (such as a `dets` table) that doesn't handle casts.
         Name = {local,Name} | {global,GlobalName} | {via,Module,ViaName}
         Mod = module()
         Args = term()
-        Opt = {debug, Dbgs}
+        Opt = {debug, Dbgs} | {min_batch_size | max_batch_size, non_neg_integer()}
         Opts = [Opt]
         Opts = [term()]
         Result = {ok,Pid} | ignore | {error,Error}
 
-Creates a `gen_batch_server` as part of a supervision tree.
+Creates a `gen_batch_server` as part of a supervision tree. The minimum and
+maximum batch sizes that control the bounds of the batch sizes that are processed
+can be be controlled using the `min_batch_size` (default: 32)
+and `max_batch_size` (default: 8192) options.
 
 
 #### cast(ServerRef, Request) -> ok
