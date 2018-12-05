@@ -190,8 +190,10 @@ do_cast_batch(Dest, Batch) ->
     ok.
 
 cast_batch_msg(Msgs0) when is_list(Msgs0) ->
-    Msgs1 = [{cast, Msg} || Msg <- Msgs0],
-    {'$gen_cast_batch', lists:reverse(Msgs1), length(Msgs1)};
+    Msgs = lists:foldl(fun (Msg, Acc) ->
+                               [{cast, Msg} | Acc]
+                       end, [], Msgs0),
+    {'$gen_cast_batch', Msgs, length(Msgs)};
 cast_batch_msg(_) ->
     erlang:error(badarg).
 
@@ -253,14 +255,14 @@ enter_loop_batched(Msg, Parent, State0) ->
     %% append to batch
     loop_batched(append_msg(Msg, State), Parent).
 
-loop_batched(#state{config = #config{batch_size = Written,
+loop_batched(#state{config = #config{batch_size = BatchSize,
                                      max_batch_size = Max} = Config,
                     batch_count = BatchCount} = State0,
-             Parent) when BatchCount >= Written ->
+             Parent) when BatchCount >= BatchSize ->
     % complete batch after seeing batch_size writes
     State = complete_batch(State0),
     % grow max batch size
-    NewBatchSize = min(Max, Written * 2),
+    NewBatchSize = min(Max, BatchSize * 2),
     loop_wait(State#state{config = Config#config{batch_size = NewBatchSize}},
               Parent);
 loop_batched(#state{debug = Debug} = State0, Parent) ->
