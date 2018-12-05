@@ -50,6 +50,14 @@ Sends an asynchronous request to the `gen_batch_server returning` `ok` immediate
 The request tuple (`{cast, Request}`) is included in the list of operations passed
 to `Module:handle_batch/2`.
 
+#### cast_batch(ServerRef, Batch) -> ok
+
+    Types:
+        ServerRef = pid() | {Name :: atom(), node()} | Name :: atom()
+        Batch = [term()]
+
+Sends an asynchronous batch of requests to the `gen_batch_server returning` `ok`
+immediately. The batch is appended in order to the current gen_batch_server batch.
 
 #### call(ServerRef, Request) -> Reply
 #### call(ServerRef, Request, Timeout) -> Reply
