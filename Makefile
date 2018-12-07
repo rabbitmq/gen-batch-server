@@ -13,3 +13,5 @@ dialyzer:
 test: clean
 	@$(EPMD) -daemon
 	@$(REBAR) ct --readable=false --sname=batch_test
+
+tests: test
