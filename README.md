@@ -1,5 +1,8 @@
 # gen_batch_server
 
+[![Build Status](https://travis-ci.org/rabbitmq/gen-batch-server.svg?branch=master)](https://travis-ci.org/rabbitmq/gen-batch-server)
+
+
 A generic batching server for erlang / elixir
 
 
