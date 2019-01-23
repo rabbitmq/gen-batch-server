@@ -22,6 +22,7 @@ all() ->
 all_tests() ->
     [
      start_link_calls_init,
+     simple_start_link_calls_init,
      cast_calls_handle_batch,
      info_calls_handle_batch,
      cast_many,
@@ -72,6 +73,20 @@ start_link_calls_init(Config) ->
                            end),
     Args = [{some_arg, argh}],
     {ok, Pid} = gen_batch_server:start_link({local, Mod}, Mod, Args, []),
+    %% having to wildcard the args as they don't seem to
+    %% validate correctly
+    ?assertEqual(true, meck:called(Mod, init, '_', Pid)),
+    ?assert(meck:validate(Mod)),
+    ok.
+
+simple_start_link_calls_init(Config) ->
+    Mod = ?config(mod, Config),
+    meck:new(Mod, [non_strict]),
+    meck:expect(Mod, init, fun([{some_arg, argh}]) ->
+                                   {ok, #{}}
+                           end),
+    Args = [{some_arg, argh}],
+    {ok, Pid} = gen_batch_server:start_link(Mod, Args),
     %% having to wildcard the args as they don't seem to
     %% validate correctly
     ?assertEqual(true, meck:called(Mod, init, '_', Pid)),
