@@ -1,7 +1,8 @@
 %% Copyright (c) 2018-Present Pivotal Software, Inc. All Rights Reserved.
 -module(gen_batch_server).
 
--export([start_link/3,
+-export([start_link/2,
+         start_link/3,
          start_link/4,
          init_it/6,
          stop/1,
@@ -80,6 +81,13 @@
 %%%
 %%% API
 %%%
+
+-spec start_link(Mod, Args) -> Result when
+     Mod :: module(),
+     Args :: term(),
+     Result ::  {ok,pid()} | {error, {already_started, pid()}}.
+start_link(Mod, Args) ->
+  gen:start(?MODULE, link, Mod, Args, []).
 
 -spec start_link(Name, Mod, Args) -> Result when
      Name :: {local, atom()} | {global, term()} | {via, atom(), term()},
