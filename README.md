@@ -6,7 +6,7 @@
 A generic batching server for erlang / elixir
 
 
-`gen_batch_server` is a stateful generic server similar to [`gen_server`](http://erlang.org/doc/man/gen_server.html) that instead of processing incoming requests
+`gen_batch_server` is a stateful generic server similar to [`gen_server`](https://erlang.org/doc/man/gen_server.html) that instead of processing incoming requests
 one by one gathers them into batches before the are passed to the behaviour
 implementation.
 
