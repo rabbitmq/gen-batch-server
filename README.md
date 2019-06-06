@@ -7,10 +7,10 @@ A generic batching server for erlang / elixir
 
 
 `gen_batch_server` is a stateful generic server similar to [`gen_server`](https://erlang.org/doc/man/gen_server.html) that instead of processing incoming requests
-one by one gathers them into batches before the are passed to the behaviour
+one by one gathers them into batches before they are passed to the behaviour
 implementation.
 
-Batches are processed _either_ when the erlang process mailbox has no further
+Batches are processed _either_ when the Erlang process mailbox has no further
 messages to batch _or_
 when the number of messages in the current batch reaches the maximum batch size
 limit.
@@ -18,12 +18,12 @@ limit.
 size limit when message ingress is high and shrinks it down again as ingress
 reduces.
 
-This behaviour makes it suitable for use as a data sink, proxy or other
-kind of aggregator that benefit from processing messages in batches. Examples
+This behaviour makes it suitable for use as a data sink, proxy or other kinds of
+aggregator that benefit from processing messages in batches. Examples
 would be a log writer that needs to flush messages to disk using `file:sync/1`
 without undue delay or a metrics sink that aggregates metrics from multiple
 processes and writes them to an external service. It could also be beneficial
-to use `gen_batch_server` to proxy a bunch processes that want to update
+to use `gen_batch_server` to proxy a bunch of processes that want to update
 some resource (such as a `dets` table) that doesn't handle casts.
 
 ## Usage
@@ -42,7 +42,7 @@ some resource (such as a `dets` table) that doesn't handle casts.
 
 Creates a `gen_batch_server` as part of a supervision tree. The minimum and
 maximum batch sizes that control the bounds of the batch sizes that are processed
-can be be controlled using the `min_batch_size` (default: 32)
+can be controlled using the `min_batch_size` (default: 32)
 and `max_batch_size` (default: 8192) options.
 
 
@@ -74,9 +74,9 @@ immediately. The batch is appended in order to the current gen_batch_server batc
         Reply = term()
         Timeout = non_neg_integer() | infinity.
 
-Sends an synchronous request to the `gen_batch_server returning` returning the
-response provided for the operation by `Module:handle_batch/2`. The timeout
-is optional and defaults to 5000ms.
+Makes a synchronous call to the `gen_batch_server` and waits for the response provided
+by `Module:handle_batch/2`.
+The timeout is optional and defaults to 5000ms.
 
 #### Module:init(Args) -> Result
 
