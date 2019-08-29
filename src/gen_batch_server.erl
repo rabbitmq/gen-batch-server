@@ -225,7 +225,7 @@ call(Name, Request, Timeout) ->
 
 loop_wait(State0, Parent) ->
     %% batches can accumulate a lot of garbage, collect it here
-    %% TOOD: make this configurable
+    %% TODO: make this configurable
     garbage_collect(),
     receive
         {system, From, Request} ->
@@ -358,7 +358,7 @@ format_status(_Reason, [_PDict, SysState, Parent, Debug,
                                                 module = Mod},
                                state = State }]) ->
     Header = gen:format_status_header("Status for batching server", Name),
-    Log = sys:get_debug(log, Debug, []),
+    Log = sys:get_log(Debug),
     [{header, Header},
      {data,
       [
