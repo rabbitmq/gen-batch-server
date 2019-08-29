@@ -44,6 +44,7 @@
                 batch_count = 0 :: non_neg_integer(),
                 config = #config{} :: #config{},
                 state :: term(),
+                needs_gc = false :: boolean(),
                 debug :: list()}).
 
 % -type state() :: #state{}.
@@ -54,7 +55,8 @@
 %%% Behaviour
 
 -type action() ::
-    {reply, from(), Msg :: term()}.
+    {reply, from(), Msg :: term()} |
+    garbage_collect.
 %% an action that can be returned from handle_batch/2
 
 -callback init(Args :: term()) ->
@@ -223,10 +225,16 @@ call(Name, Request, Timeout) ->
 
 %% Internal
 
-loop_wait(State0, Parent) ->
+loop_wait(State00, Parent) ->
     %% batches can accumulate a lot of garbage, collect it here
-    %% TODO: make this configurable
-    garbage_collect(),
+    %% evaluate gc state
+    State0 = case State00 of
+                 #state{needs_gc = true} ->
+                     _ = garbage_collect(),
+                     State00#state{needs_gc = false};
+                 _ ->
+                     State00
+             end,
     receive
         {system, From, Request} ->
             sys:handle_system_msg(Request, From, Parent,
@@ -290,7 +298,6 @@ loop_batched(#state{debug = Debug} = State0, Parent) ->
               Config = State#state.config,
               NewBatchSize = max(Config#config.min_batch_size,
                                  Config#config.batch_size / 2),
-              % loop_wait(State#state{batch_size = NewBatchSize}, Parent)
               loop_wait(State#state{config =
                                     Config#config{batch_size = NewBatchSize}},
                         Parent)
@@ -313,13 +320,19 @@ complete_batch(#state{batch = Batch,
                          state = Inner,
                          batch_count = 0};
         {ok, Actions, Inner} ->
-            Debug = lists:foldl(fun ({reply, {Pid, Tag}, Msg}, Dbg) ->
-                                        Pid ! {Tag, Msg},
-                                        handle_debug_out(Pid, Msg, Dbg)
-                                end, Debug0, Actions),
+            {ShouldGc, Debug} =
+                lists:foldl(fun ({reply, {Pid, Tag}, Msg},
+                                 {ShouldGc, Dbg}) ->
+                                    Pid ! {Tag, Msg},
+                                    {ShouldGc,
+                                     handle_debug_out(Pid, Msg, Dbg)};
+                                (garbage_collect, {_, Dbg}) ->
+                                    {true, Dbg}
+                            end, {false, Debug0}, Actions),
             State0#state{batch = [],
                          state = Inner,
                          batch_count = 0,
+                         needs_gc = ShouldGc,
                          debug = Debug};
         {stop, Reason} ->
             terminate(Reason, State0),
@@ -358,7 +371,8 @@ format_status(_Reason, [_PDict, SysState, Parent, Debug,
                                                 module = Mod},
                                state = State }]) ->
     Header = gen:format_status_header("Status for batching server", Name),
-    Log = sys:get_log(Debug),
+    Log = sys_get_log(Debug),
+
     [{header, Header},
      {data,
       [
@@ -372,6 +386,14 @@ format_status(_Reason, [_PDict, SysState, Parent, Debug,
              [State];
          T -> [T]
      end].
+
+-if(?OTP_RELEASE >= 22).
+sys_get_log(Debug) ->
+    sys:get_log(Debug).
+-else.
+sys_get_log(Debug) ->
+    sys:get_debug(log, Debug, []).
+-endif.
 
 write_debug(Dev, Event, Name) ->
     io:format(Dev, "~p event = ~p~n", [Name, Event]).

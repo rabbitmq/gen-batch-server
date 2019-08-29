@@ -104,7 +104,7 @@ cast_calls_handle_batch(Config) ->
     meck:expect(Mod, handle_batch,
                 fun([{cast, {put, k, v}}], State) ->
                         Self ! continue,
-                        {ok, [], maps:put(k, v, State)}
+                        {ok, [garbage_collect], maps:put(k, v, State)}
                 end),
     ok = gen_batch_server:cast(Pid, Msg),
     receive continue -> ok after 2000 -> exit(timeout) end,
@@ -194,7 +194,7 @@ call_calls_handle_batch(Config) ->
     Msg = {put, k, v},
     meck:expect(Mod, handle_batch,
                 fun([{call, From, {put, k, v}}], State) ->
-                        {ok, [{reply, From, {ok, k}}],
+                        {ok, [{reply, From, {ok, k}}, garbage_collect],
                          maps:put(k, v, State)}
                 end),
     {ok, k}  = gen_batch_server:call(Pid, Msg),
