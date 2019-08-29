@@ -101,7 +101,7 @@ to `start_link/4`.
         Result = {ok, State} | {ok, Actions, State} | {stop, Reason}
         State = term()
         From = {Pid :: pid(), Tag :: reference()}
-        Action = {reply, From, Msg}
+        Action = {reply, From, Msg} | garbage_collect
         Actions = [Action]
         Reason = term()
 
