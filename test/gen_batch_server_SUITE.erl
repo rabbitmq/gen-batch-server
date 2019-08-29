@@ -33,7 +33,8 @@ all_tests() ->
      sys_get_status_calls_format_status,
      format_status_is_optional,
      max_batch_size,
-     stop_calls_terminate
+     stop_calls_terminate,
+     process_hibernates
     ].
 
 groups() ->
@@ -137,6 +138,33 @@ info_calls_handle_batch(Config) ->
     receive continue -> ok after 2000 -> exit(timeout) end,
     ?assertEqual(true, meck:called(Mod, handle_batch, '_', Pid)),
     ?assert(meck:validate(Mod)),
+    ok.
+
+process_hibernates(Config) ->
+    Mod = ?config(mod, Config),
+    meck:new(Mod, [non_strict]),
+    meck:expect(Mod, init, fun(Init) -> {ok, Init} end),
+    Args = #{},
+    {ok, Pid} = gen_batch_server:start_link({local, Mod}, Mod, Args,
+                                            [{hibernate_after, 10}]),
+    %% sleep longer than hibernation wait
+    timer:sleep(20),
+    ?assertEqual({current_function, {erlang, hibernate, 3}},
+                 erlang:process_info(Pid, current_function)),
+    Msg = {put, k, v},
+    Self = self(),
+    meck:expect(Mod, handle_batch,
+                fun([{info, {put, k, v}}], State) ->
+                        Self ! continue,
+                        {ok, [], maps:put(k, v, State)}
+                end),
+    Pid ! Msg,
+    receive continue -> ok after 2000 -> exit(timeout) end,
+    ?assertEqual(true, meck:called(Mod, handle_batch, '_', Pid)),
+    ?assert(meck:validate(Mod)),
+    timer:sleep(20),
+    ?assertEqual({current_function, {erlang, hibernate, 3}},
+                 erlang:process_info(Pid, current_function)),
     ok.
 
 cast_many(Config) ->

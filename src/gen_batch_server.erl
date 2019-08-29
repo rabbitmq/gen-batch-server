@@ -15,7 +15,9 @@
          system_terminate/4,
          system_get_state/1,
          write_debug/3,
-         format_status/2
+         format_status/2,
+         %% needed for hibernation
+         loop_wait/2
         ]).
 
 -define(MIN_MAX_BATCH_SIZE, 32).
@@ -38,7 +40,8 @@
                  max_batch_size :: non_neg_integer(),
                  parent :: pid(),
                  name :: atom(),
-                 module :: module()}).
+                 module :: module(),
+                 hibernate_after = infinity :: non_neg_integer()}).
 
 -record(state, {batch = [] :: [op()],
                 batch_count = 0 :: non_neg_integer(),
@@ -114,6 +117,7 @@ init_it(Starter, self, Name, Mod, Args, Options) ->
 init_it(Starter, Parent, Name0, Mod, Args, Options) ->
     Name = gen:name(Name0),
     Debug = gen:debug_options(Name, Options),
+    HibernateAfter = gen:hibernate_after(Options),
     MaxBatchSize = proplists:get_value(max_batch_size, Options,
                                        ?MAX_MAX_BATCH_SIZE),
     MinBatchSize = proplists:get_value(min_batch_size, Options,
@@ -126,7 +130,8 @@ init_it(Starter, Parent, Name0, Mod, Args, Options) ->
                            name = Name,
                            batch_size = MinBatchSize,
                            min_batch_size = MinBatchSize,
-                           max_batch_size = MaxBatchSize},
+                           max_batch_size = MaxBatchSize,
+                           hibernate_after = HibernateAfter},
             State = #state{config = Conf,
                            state = State0,
                            debug = Debug},
@@ -225,7 +230,7 @@ call(Name, Request, Timeout) ->
 
 %% Internal
 
-loop_wait(State00, Parent) ->
+loop_wait(#state{config = #config{hibernate_after = Hib}} = State00, Parent) ->
     %% batches can accumulate a lot of garbage, collect it here
     %% evaluate gc state
     State0 = case State00 of
@@ -244,6 +249,8 @@ loop_wait(State00, Parent) ->
             exit(Reason);
         Msg ->
             enter_loop_batched(Msg, Parent, State0)
+    after Hib ->
+              proc_lib:hibernate(?MODULE, ?FUNCTION_NAME, [State0, Parent])
     end.
 
 append_msg({'$gen_cast', Msg},
