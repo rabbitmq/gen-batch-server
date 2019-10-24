@@ -27,6 +27,8 @@ all_tests() ->
      info_calls_handle_batch,
      cast_many,
      cast_batch,
+     ordering,
+     ordering_reversed,
      call_calls_handle_batch,
      returning_stop_calls_terminate,
      terminate_is_optional,
@@ -207,6 +209,53 @@ cast_batch(Config) ->
     gen_batch_server:cast_batch(Pid, [{put, I, I} || I <- lists:seq(1, Num)]),
     receive {done, Num, Num} ->
                 ok
+    after 5000 ->
+              exit(timeout)
+    end,
+    ?assert(meck:validate(Mod)),
+    ok.
+
+ordering(Config) ->
+    test_ordering(Config, false).
+
+ordering_reversed(Config) ->
+    test_ordering(Config, true).
+
+test_ordering(Config, Reverse) ->
+    Mod = ?config(mod, Config),
+    meck:new(Mod, [non_strict]),
+    meck:expect(Mod, init, fun(Init) -> {ok, Init} end),
+    Args = #{},
+    Opts = [{reversed_batch, Reverse}],
+    {ok, Pid} = gen_batch_server:start_link({local, Mod}, Mod, Args, Opts),
+    Self = self(),
+    ExpectedOps = [{cast,1}, {cast,2}, {cast,3}, {cast,4}, {cast,5}],
+    Expected = case Reverse of
+                   false ->
+                       ExpectedOps;
+                   true ->
+                       lists:reverse(ExpectedOps)
+               end,
+
+    meck:expect(Mod, handle_batch,
+                fun(Ops, State) ->
+                        case Ops of
+                            Expected ->
+                                Self ! in_order;
+                            _ ->
+                                Self ! {out_of_order, Ops}
+                        end,
+                        {ok, State}
+                end),
+    gen_batch_server:cast(Pid, 1),
+    gen_batch_server:cast_batch(Pid, [I || I <- lists:seq(2, 4)]),
+    gen_batch_server:cast(Pid, 5),
+
+    receive in_order ->
+                ok;
+            {out_of_order, Ops} ->
+                ct:pal("out of order ops ~w", [Ops]),
+                exit(outof_order_assertion)
     after 5000 ->
               exit(timeout)
     end,
