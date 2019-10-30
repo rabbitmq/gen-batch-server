@@ -35,7 +35,9 @@ some resource (such as a `dets` table) that doesn't handle casts.
         Name = {local,Name} | {global,GlobalName} | {via,Module,ViaName}
         Mod = module()
         Args = term()
-        Opt = {debug, Dbgs} | {min_batch_size | max_batch_size, non_neg_integer()}
+        Opt = {debug, Dbgs} |
+              {min_batch_size | max_batch_size, non_neg_integer()} |
+              {reversed_batch, boolean()}
         Opts = [Opt]
         Opts = [term()]
         Result = {ok,Pid} | ignore | {error,Error}
@@ -44,6 +46,11 @@ Creates a `gen_batch_server` as part of a supervision tree. The minimum and
 maximum batch sizes that control the bounds of the batch sizes that are processed
 can be controlled using the `min_batch_size` (default: 32)
 and `max_batch_size` (default: 8192) options.
+
+The `reversed_batch` option is an advanced option that where the batch that is
+passed to `handle_batch/2` is in reversed order to the one the messages were
+received in. This avoids a `list:reverse/1` all before the batch handling and is
+somewhat more performant.
 
 
 #### cast(ServerRef, Request) -> ok

@@ -41,7 +41,8 @@
                  parent :: pid(),
                  name :: atom(),
                  module :: module(),
-                 hibernate_after = infinity :: non_neg_integer()}).
+                 hibernate_after = infinity :: non_neg_integer(),
+                 reversed_batch = false :: boolean()}).
 
 -record(state, {batch = [] :: [op()],
                 batch_count = 0 :: non_neg_integer(),
@@ -122,6 +123,7 @@ init_it(Starter, Parent, Name0, Mod, Args, Options) ->
                                        ?MAX_MAX_BATCH_SIZE),
     MinBatchSize = proplists:get_value(min_batch_size, Options,
                                        ?MIN_MAX_BATCH_SIZE),
+    ReverseBatch = proplists:get_value(reversed_batch, Options, false),
     case catch Mod:init(Args) of
         {ok, State0} ->
             proc_lib:init_ack(Starter, {ok, self()}),
@@ -131,7 +133,8 @@ init_it(Starter, Parent, Name0, Mod, Args, Options) ->
                            batch_size = MinBatchSize,
                            min_batch_size = MinBatchSize,
                            max_batch_size = MaxBatchSize,
-                           hibernate_after = HibernateAfter},
+                           hibernate_after = HibernateAfter,
+                           reversed_batch = ReverseBatch},
             State = #state{config = Conf,
                            state = State0,
                            debug = Debug},
@@ -317,11 +320,22 @@ terminate(Reason, #state{config = #config{module = Mod}, state = Inner}) ->
 
 complete_batch(#state{batch = []} = State) ->
     State;
-complete_batch(#state{batch = Batch,
-                      config = #config{module = Mod},
+complete_batch(#state{batch = Batch0,
+                      config = #config{module = Mod,
+                                       reversed_batch = ReverseBatch},
                       state = Inner0,
                       debug = Debug0} = State0) ->
-    case catch Mod:handle_batch(lists:reverse(Batch), Inner0) of
+    Batch = case ReverseBatch of
+                false ->
+                    %% reversing restores the received order
+                    lists:reverse(Batch0);
+                true ->
+                    %% accepting the batch in reverse order means we can avoid
+                    %% reversing the list
+                    Batch0
+            end,
+
+    case catch Mod:handle_batch(Batch, Inner0) of
         {ok, Inner} ->
             State0#state{batch = [],
                          state = Inner,
