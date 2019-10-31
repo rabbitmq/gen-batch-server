@@ -1,6 +1,5 @@
 %% Copyright (c) 2018-Present Pivotal Software, Inc. All Rights Reserved.
 -module(gen_batch_server).
-
 -export([start_link/2,
          start_link/3,
          start_link/4,
@@ -93,7 +92,7 @@
      Args :: term(),
      Result ::  {ok,pid()} | {error, {already_started, pid()}}.
 start_link(Mod, Args) ->
-  gen:start(?MODULE, link, Mod, Args, []).
+  gen:start(?MODULE, link, Mod, {[], Args}, []).
 
 -spec start_link(Name, Mod, Args) -> Result when
      Name :: {local, atom()} | {global, term()} | {via, atom(), term()},
@@ -101,7 +100,7 @@ start_link(Mod, Args) ->
      Args :: term(),
      Result ::  {ok,pid()} | {error, {already_started, pid()}}.
 start_link(Name, Mod, Args) ->
-    gen:start(?MODULE, link, Name, Mod, Args, []).
+    gen:start(?MODULE, link, Name, Mod, {[], Args}, []).
 
 -spec start_link(Name, Mod, Args, Options) -> Result when
      Name :: {local, atom()} | {global, term()} | {via, atom(), term()},
@@ -109,21 +108,28 @@ start_link(Name, Mod, Args) ->
      Args :: term(),
      Options :: list(),
      Result ::  {ok,pid()} | {error, {already_started, pid()}}.
-start_link(Name, Mod, Args, Opts) ->
-    gen:start(?MODULE, link, Name, Mod, Args, Opts).
+start_link(Name, Mod, Args, Opts0) ->
+    %% filter out gen batch server specific options as the options type in gen
+    %% is closed and dialyzer would complain.
+    {GBOpts, Opts} = lists:splitwith(fun ({Key, _}) ->
+                                             Key == max_batch_size orelse
+                                             Key == min_batch_size orelse
+                                             Key == reversed_batch
+                                     end, Opts0),
+    gen:start(?MODULE, link, Name, Mod, {GBOpts, Args}, Opts).
 
 %% pretty much copied wholesale from gen_server
 init_it(Starter, self, Name, Mod, Args, Options) ->
     init_it(Starter, self(), Name, Mod, Args, Options);
-init_it(Starter, Parent, Name0, Mod, Args, Options) ->
+init_it(Starter, Parent, Name0, Mod, {GBOpts, Args}, Options) ->
     Name = gen:name(Name0),
     Debug = gen:debug_options(Name, Options),
     HibernateAfter = gen:hibernate_after(Options),
-    MaxBatchSize = proplists:get_value(max_batch_size, Options,
+    MaxBatchSize = proplists:get_value(max_batch_size, GBOpts,
                                        ?MAX_MAX_BATCH_SIZE),
-    MinBatchSize = proplists:get_value(min_batch_size, Options,
+    MinBatchSize = proplists:get_value(min_batch_size, GBOpts,
                                        ?MIN_MAX_BATCH_SIZE),
-    ReverseBatch = proplists:get_value(reversed_batch, Options, false),
+    ReverseBatch = proplists:get_value(reversed_batch, GBOpts, false),
     case catch Mod:init(Args) of
         {ok, State0} ->
             proc_lib:init_ack(Starter, {ok, self()}),

@@ -75,7 +75,7 @@ start_link_calls_init(Config) ->
                                    {ok, #{}}
                            end),
     Args = [{some_arg, argh}],
-    {ok, Pid} = gen_batch_server:start_link({local, Mod}, Mod, Args, []),
+    {ok, Pid} = gen_batch_server:start_link({local, Mod}, Mod, Args),
     %% having to wildcard the args as they don't seem to
     %% validate correctly
     ?assertEqual(true, meck:called(Mod, init, '_', Pid)),
