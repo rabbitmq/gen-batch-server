@@ -3,7 +3,7 @@
               {licenses,["Apache","MPL"]},
               {links,[{"github",
                        "https://github.com/rabbitmq/gen-batch-server"}]},
-              {vsn,"0.8.1"},
+              {vsn,"0.8.2"},
               {modules,[gen_batch_server]},
               {registered,[]},
               {applications,[kernel,stdlib]},
