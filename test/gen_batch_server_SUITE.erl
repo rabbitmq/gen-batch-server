@@ -76,10 +76,19 @@ start_link_calls_init(Config) ->
                            end),
     Args = [{some_arg, argh}],
     {ok, Pid} = gen_batch_server:start_link({local, Mod}, Mod, Args),
-    %% having to wildcard the args as they don't seem to
-    %% validate correctly
     ?assertEqual(true, meck:called(Mod, init, '_', Pid)),
+    {ok, Pid2} = gen_batch_server:start_link(Mod, Args),
+    ?assertEqual(true, meck:called(Mod, init, '_', Pid2)),
+    {ok, Pid3} = gen_batch_server:start_link(undefined, Mod, Args),
+    ?assertEqual(true, meck:called(Mod, init, '_', Pid3)),
+    Opts = [{reversed_batch, true}],
+    {ok, Pid4} = gen_batch_server:start_link(undefined, Mod, Args, Opts),
+    ?assertEqual(true, meck:called(Mod, init, '_', Pid4)),
     ?assert(meck:validate(Mod)),
+    gen_batch_server:stop(Pid),
+    gen_batch_server:stop(Pid2),
+    gen_batch_server:stop(Pid3),
+    gen_batch_server:stop(Pid4),
     ok.
 
 simple_start_link_calls_init(Config) ->

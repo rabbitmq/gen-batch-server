@@ -92,31 +92,30 @@
      Args :: term(),
      Result ::  {ok,pid()} | {error, {already_started, pid()}}.
 start_link(Mod, Args) ->
-  gen:start(?MODULE, link, Mod, {[], Args}, []).
+    gen:start(?MODULE, link, Mod, {[], Args}, []).
 
 -spec start_link(Name, Mod, Args) -> Result when
-     Name :: {local, atom()} | {global, term()} | {via, atom(), term()},
+     Name :: {local, atom()} |
+             {global, term()} |
+             {via, atom(), term()} |
+             undefined,
      Mod :: module(),
      Args :: term(),
      Result ::  {ok,pid()} | {error, {already_started, pid()}}.
 start_link(Name, Mod, Args) ->
-    gen:start(?MODULE, link, Name, Mod, {[], Args}, []).
+    gen_start(Name, Mod, Args, []).
 
 -spec start_link(Name, Mod, Args, Options) -> Result when
-     Name :: {local, atom()} | {global, term()} | {via, atom(), term()},
+     Name :: {local, atom()} |
+             {global, term()} |
+             {via, atom(), term()} |
+             undefined,
      Mod :: module(),
      Args :: term(),
      Options :: list(),
      Result ::  {ok,pid()} | {error, {already_started, pid()}}.
 start_link(Name, Mod, Args, Opts0) ->
-    %% filter out gen batch server specific options as the options type in gen
-    %% is closed and dialyzer would complain.
-    {GBOpts, Opts} = lists:splitwith(fun ({Key, _}) ->
-                                             Key == max_batch_size orelse
-                                             Key == min_batch_size orelse
-                                             Key == reversed_batch
-                                     end, Opts0),
-    gen:start(?MODULE, link, Name, Mod, {GBOpts, Args}, Opts).
+    gen_start(Name, Mod, Args, Opts0).
 
 %% pretty much copied wholesale from gen_server
 init_it(Starter, self, Name, Mod, Args, Options) ->
@@ -433,3 +432,23 @@ do_send(Dest, Msg) ->
         error:_ -> ok
     end,
     ok.
+
+gen_start(undefined, Mod, Args, Opts0) ->
+    %% filter out gen batch server specific options as the options type in gen
+    %% is closed and dialyzer would complain.
+    {GBOpts, Opts} = lists:splitwith(fun ({Key, _}) ->
+                                             Key == max_batch_size orelse
+                                             Key == min_batch_size orelse
+                                             Key == reversed_batch
+                                     end, Opts0),
+    gen:start(?MODULE, link, Mod, {GBOpts, Args}, Opts);
+gen_start(Name, Mod, Args, Opts0) ->
+    %% filter out gen batch server specific options as the options type in gen
+    %% is closed and dialyzer would complain.
+    {GBOpts, Opts} = lists:splitwith(fun ({Key, _}) ->
+                                             Key == max_batch_size orelse
+                                             Key == min_batch_size orelse
+                                             Key == reversed_batch
+                                     end, Opts0),
+    gen:start(?MODULE, link, Name, Mod, {GBOpts, Args}, Opts).
+
