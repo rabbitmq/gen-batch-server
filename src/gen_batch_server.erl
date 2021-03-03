@@ -418,13 +418,8 @@ format_status(_Reason, [_PDict, SysState, Parent, Debug,
          T -> [T]
      end].
 
--if(?OTP_RELEASE >= 22).
 sys_get_log(Debug) ->
     sys:get_log(Debug).
--else.
-sys_get_log(Debug) ->
-    sys:get_debug(log, Debug, []).
--endif.
 
 write_debug(Dev, Event, Name) ->
     io:format(Dev, "~p event = ~p~n", [Name, Event]).
