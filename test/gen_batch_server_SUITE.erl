@@ -1,6 +1,7 @@
 %% Copyright (c) 2018-Present Pivotal Software, Inc. All Rights Reserved.
 -module(gen_batch_server_SUITE).
 
+-compile(nowarn_export_all).
 -compile(export_all).
 
 -export([
@@ -23,6 +24,7 @@ all_tests() ->
     [
      start_link_calls_init,
      simple_start_link_calls_init,
+     handle_continue,
      cast_calls_handle_batch,
      info_calls_handle_batch,
      cast_many,
@@ -102,6 +104,49 @@ simple_start_link_calls_init(Config) ->
     %% having to wildcard the args as they don't seem to
     %% validate correctly
     ?assertEqual(true, meck:called(Mod, init, '_', Pid)),
+    ?assert(meck:validate(Mod)),
+    ok.
+
+handle_continue(Config) ->
+    Self = self(),
+    Mod = ?config(mod, Config),
+    meck:new(Mod, [non_strict]),
+    meck:expect(Mod, init, fun([{some_arg, argh}]) ->
+                                   {ok, #{}, {continue, post_init}}
+                           end),
+    meck:expect(Mod, handle_continue, fun(Cont, #{}) ->
+                                              Self ! {continue_called, Cont},
+                                              {ok, #{}}
+                                      end),
+    meck:expect(Mod, handle_batch, fun(_Batch, #{}) ->
+                                           {ok, #{}, {continue, batch}}
+                                   end),
+    Args = [{some_arg, argh}],
+    {ok, Pid} = gen_batch_server:start_link(Mod, Args),
+    %% having to wildcard the args as they don't seem to
+    %% validate correctly
+    ?assertEqual(true, meck:called(Mod, init, '_', Pid)),
+    ?assertEqual(true, meck:called(Mod, handle_continue, '_', Pid)),
+    receive
+        {continue_called, post_init} -> ok
+    after 2000 ->
+              exit(continue_timeout)
+    end,
+    ok  = gen_batch_server:cast(Pid, msg),
+    receive
+        {continue_called, batch} -> ok
+    after 2000 ->
+              exit(continue_timeout_2)
+    end,
+    meck:expect(Mod, handle_batch, fun(_Batch, #{}) ->
+                                           {ok, [garbage_collect], #{}, {continue, batch}}
+                                   end),
+    ok  = gen_batch_server:cast(Pid, msg),
+    receive
+        {continue_called, batch} -> ok
+    after 2000 ->
+              exit(continue_timeout_3)
+    end,
     ?assert(meck:validate(Mod)),
     ok.
 
@@ -247,7 +292,10 @@ test_ordering(Config, Reverse) ->
                end,
 
     meck:expect(Mod, handle_batch,
-                fun(Ops, State) ->
+                fun([{cast, block}], State) ->
+                        timer:sleep(100),
+                        {ok, State};
+                   (Ops, State) ->
                         case Ops of
                             Expected ->
                                 Self ! in_order;
@@ -256,6 +304,8 @@ test_ordering(Config, Reverse) ->
                         end,
                         {ok, State}
                 end),
+    gen_batch_server:cast(Pid, block),
+    timer:sleep(10),
     gen_batch_server:cast(Pid, 1),
     gen_batch_server:cast_batch(Pid, [I || I <- lists:seq(2, 4)]),
     gen_batch_server:cast(Pid, 5),
@@ -264,7 +314,7 @@ test_ordering(Config, Reverse) ->
                 ok;
             {out_of_order, Ops} ->
                 ct:pal("out of order ops ~w", [Ops]),
-                exit(outof_order_assertion)
+                exit({outof_order_assertion, Ops})
     after 5000 ->
               exit(timeout)
     end,

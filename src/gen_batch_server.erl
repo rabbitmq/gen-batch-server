@@ -74,9 +74,13 @@
 
 -callback handle_batch([op()], State) ->
     {ok, State} |
+    {ok, State, {continue, term()}} |
     {ok, [action()], State} |
+    {ok, [action()], State, {continue, term()}} |
     {stop, Reason :: term()}
       when State :: term().
+
+-callback handle_continue(Continue :: term(), State :: term()) -> term().
 
 -callback terminate(Reason :: term(), State :: term()) -> term().
 
@@ -84,7 +88,8 @@
 
 %% TODO: code_change
 
--optional_callbacks([format_status/1,
+-optional_callbacks([handle_continue/2,
+                     format_status/1,
                      terminate/2]).
 
 
@@ -134,20 +139,27 @@ init_it(Starter, Parent, Name0, Mod, {GBOpts, Args}, Options) ->
     MinBatchSize = proplists:get_value(min_batch_size, GBOpts,
                                        ?MIN_MAX_BATCH_SIZE),
     ReverseBatch = proplists:get_value(reversed_batch, GBOpts, false),
+    Conf = #config{module = Mod,
+                   parent = Parent,
+                   name = Name,
+                   batch_size = MinBatchSize,
+                   min_batch_size = MinBatchSize,
+                   max_batch_size = MaxBatchSize,
+                   hibernate_after = HibernateAfter,
+                   reversed_batch = ReverseBatch},
     case catch Mod:init(Args) of
-        {ok, State0} ->
+        {ok, Inner0} ->
             proc_lib:init_ack(Starter, {ok, self()}),
-            Conf = #config{module = Mod,
-                           parent = Parent,
-                           name = Name,
-                           batch_size = MinBatchSize,
-                           min_batch_size = MinBatchSize,
-                           max_batch_size = MaxBatchSize,
-                           hibernate_after = HibernateAfter,
-                           reversed_batch = ReverseBatch},
             State = #state{config = Conf,
-                           state = State0,
+                           state = Inner0,
                            debug = Debug},
+            loop_wait(State, Parent);
+        {ok, Inner0, {continue, Continue}} ->
+            proc_lib:init_ack(Starter, {ok, self()}),
+            State0 = #state{config = Conf,
+                            state = Inner0,
+                            debug = Debug},
+            State = handle_continue(Continue, State0),
             loop_wait(State, Parent);
         {stop, Reason} ->
             %% For consistency, we must make sure that the
@@ -350,21 +362,52 @@ complete_batch(#state{batch = Batch0,
             State0#state{batch = [],
                          state = Inner,
                          batch_count = 0};
-        {ok, Actions, Inner} ->
-            {ShouldGc, Debug} =
-                lists:foldl(fun ({reply, {Pid, Tag}, Msg},
-                                 {ShouldGc, Dbg}) ->
-                                    Pid ! {Tag, Msg},
-                                    {ShouldGc,
-                                     handle_debug_out(Pid, Msg, Dbg)};
-                                (garbage_collect, {_, Dbg}) ->
-                                    {true, Dbg}
-                            end, {false, Debug0}, Actions),
+        {ok, Inner, {continue, Continue}} ->
+            handle_continue(Continue,
+                            State0#state{batch = [],
+                                         state = Inner,
+                                         batch_count = 0});
+        {ok, Actions, Inner} when is_list(Actions) ->
+            {ShouldGc, Debug} = handle_actions(Actions, Debug0),
             State0#state{batch = [],
-                         state = Inner,
                          batch_count = 0,
+                         state = Inner,
                          needs_gc = ShouldGc,
                          debug = Debug};
+        {ok, Actions, Inner, {continue, Continue}} when is_list(Actions) ->
+            {ShouldGc, Debug} = handle_actions(Actions, Debug0),
+            handle_continue(Continue,
+                            State0#state{batch = [],
+                                         batch_count = 0,
+                                         state = Inner,
+                                         needs_gc = ShouldGc,
+                                         debug = Debug});
+        {stop, Reason} ->
+            terminate(Reason, State0),
+            exit(Reason);
+        {'EXIT', Reason} ->
+            terminate(Reason, State0),
+            exit(Reason)
+    end.
+
+handle_actions(Actions, Debug0) ->
+    lists:foldl(fun ({reply, {Pid, Tag}, Msg},
+                     {ShouldGc, Dbg}) ->
+                        Pid ! {Tag, Msg},
+                        {ShouldGc,
+                         handle_debug_out(Pid, Msg, Dbg)};
+                    (garbage_collect, {_, Dbg}) ->
+                        {true, Dbg}
+                end, {false, Debug0}, Actions).
+
+
+handle_continue(Continue, #state{config = #config{module = Mod},
+                                 state = Inner0} = State0) ->
+    case catch Mod:handle_continue(Continue, Inner0) of
+        {ok, Inner} ->
+            State0#state{state = Inner};
+        {ok, Inner, {continue, Continue}} ->
+            handle_continue(Continue, State0#state{state = Inner});
         {stop, Reason} ->
             terminate(Reason, State0),
             exit(Reason);
