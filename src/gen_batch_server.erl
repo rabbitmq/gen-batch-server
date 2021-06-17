@@ -69,6 +69,7 @@
 
 -callback init(Args :: term()) ->
     {ok, State} |
+    {ok, State, {continue, term()}} |
     {stop, Reason :: term()}
       when State :: term().
 
