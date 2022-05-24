@@ -101,7 +101,7 @@
 -spec start_link(Mod, Args) -> Result when
      Mod :: module(),
      Args :: term(),
-     Result ::  {ok,pid()} | {error, {already_started, pid()}}.
+     Result ::  {ok,pid()} | {error, Reason :: term()}.
 start_link(Mod, Args) ->
     gen:start(?MODULE, link, Mod, {[], Args}, []).
 
@@ -112,7 +112,7 @@ start_link(Mod, Args) ->
              undefined,
      Mod :: module(),
      Args :: term(),
-     Result ::  {ok,pid()} | {error, {already_started, pid()}}.
+     Result ::  {ok,pid()} | {error, Reason :: term()}.
 start_link(Name, Mod, Args) ->
     gen_start(Name, Mod, Args, []).
 
@@ -124,7 +124,7 @@ start_link(Name, Mod, Args) ->
      Mod :: module(),
      Args :: term(),
      Options :: list(),
-     Result ::  {ok,pid()} | {error, {already_started, pid()}}.
+     Result ::  {ok,pid()} | {error, Reason :: term()}.
 start_link(Name, Mod, Args, Opts0) ->
     gen_start(Name, Mod, Args, Opts0).
 
