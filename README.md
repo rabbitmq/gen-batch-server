@@ -137,5 +137,5 @@ Optional. Used to provide a custom formatting of the user state.
 
 # Copyright
 
-(c) Pivotal Software Inc., 2018-Present.
+(c) VMware Inc. or its affiliates, 2018-2023.
 
