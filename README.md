@@ -137,5 +137,5 @@ Optional. Used to provide a custom formatting of the user state.
 
 # Copyright
 
-(c) VMware Inc. or its affiliates, 2018-2023.
+(c) 2018-2023 Broadcom. All Rights Reserved. The term Broadcom refers to Broadcom Inc. and/or its subsidiaries.
 
