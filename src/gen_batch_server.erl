@@ -244,7 +244,7 @@ cast_batch_msg(_) ->
 call(Name, Request) ->
     call(Name, Request, 5000).
 
--spec call(pid() | atom(), term(), non_neg_integer()) -> term().
+-spec call(pid() | atom(), term(), non_neg_integer() | infinity) -> term().
 call(Name, Request, Timeout) ->
     case catch gen:call(Name, '$gen_call', Request, Timeout) of
         {ok, Res} ->
