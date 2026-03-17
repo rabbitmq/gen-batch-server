@@ -70,7 +70,9 @@
 -callback init(Args :: term()) ->
     {ok, State} |
     {ok, State, {continue, term()}} |
-    {stop, Reason :: term()}
+    ignore |
+    {stop, Reason :: term()} |
+    {error, Reason :: term()}
       when State :: term().
 
 -callback handle_batch([op()], State) ->
@@ -148,21 +150,21 @@ init_it(Starter, Parent, Name0, Mod, {GBOpts, Args}, Options) ->
                    max_batch_size = MaxBatchSize,
                    hibernate_after = HibernateAfter,
                    reversed_batch = ReverseBatch},
-    case catch Mod:init(Args) of
-        {ok, Inner0} ->
+    case init_it(Mod, Args) of
+        {ok, {ok, Inner0}} ->
             proc_lib:init_ack(Starter, {ok, self()}),
             State = #state{config = Conf,
                            state = Inner0,
                            debug = Debug},
             loop_wait(State, Parent);
-        {ok, Inner0, {continue, Continue}} ->
+        {ok, {ok, Inner0, {continue, Continue}}} ->
             proc_lib:init_ack(Starter, {ok, self()}),
             State0 = #state{config = Conf,
                             state = Inner0,
                             debug = Debug},
             State = handle_continue(Continue, State0),
             loop_wait(State, Parent);
-        {stop, Reason} ->
+        {ok, {stop, Reason}} ->
             %% For consistency, we must make sure that the
             %% registered name (if any) is unregistered before
             %% the parent process is notified about the failure.
@@ -170,20 +172,29 @@ init_it(Starter, Parent, Name0, Mod, {GBOpts, Args}, Options) ->
             %% an 'already_started' error if it immediately
             %% tried starting the process again.)
             gen:unregister_name(Name0),
-            proc_lib:init_ack(Starter, {error, Reason}),
             exit(Reason);
-        % ignore ->
-        %     gen:unregister_name(Name0),
-        %     proc_lib:init_ack(Starter, ignore),
-        %     exit(normal);
-        {'EXIT', Reason} ->
+        {ok, {error, _Reason} = Error} ->
+            %% The point of this clause is that we shall have a silent/graceful
+            %% termination. The error reason will be returned to the
+            %% 'Starter' ({error, Reason}), but *no* crash report.
             gen:unregister_name(Name0),
-            proc_lib:init_ack(Starter, {error, Reason}),
-            exit(Reason);
-        Else ->
-            Error = {bad_return_value, Else},
-            proc_lib:init_ack(Starter, {error, Error}),
-            exit(Error)
+            proc_lib:init_fail(Starter, Error, {exit, normal});
+        {ok, ignore} ->
+            gen:unregister_name(Name0),
+            proc_lib:init_fail(Starter, ignore, {exit, normal});
+        {ok, Else} ->
+            gen:unregister_name(Name0),
+            exit({bad_return_value, Else});
+        {'EXIT', Class, Reason, Stacktrace} ->
+            gen:unregister_name(Name0),
+            erlang:raise(Class, Reason, Stacktrace)
+    end.
+init_it(Mod, Args) ->
+    try
+        {ok, Mod:init(Args)}
+    catch
+        throw:R -> {ok, R};
+        Class:R:S -> {'EXIT', Class, R, S}
     end.
 
 stop(Name) ->
