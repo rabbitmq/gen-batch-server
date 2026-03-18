@@ -172,4 +172,4 @@ Optional. Used to provide a custom formatting of the user state.
 
 # Copyright
 
-(c) 2018-2023 Broadcom. All Rights Reserved. The term Broadcom refers to Broadcom Inc. and/or its subsidiaries.
+(c) 2018-2026 Broadcom. All Rights Reserved. The term Broadcom refers to Broadcom Inc. and/or its subsidiaries.
