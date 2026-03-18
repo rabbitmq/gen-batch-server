@@ -103,7 +103,7 @@
 -spec start_link(Mod, Args) -> Result when
      Mod :: module(),
      Args :: term(),
-     Result ::  {ok,pid()} | {error, Reason :: term()}.
+     Result ::  {ok,pid()} | ignore | {error, Reason :: term()}.
 start_link(Mod, Args) ->
     gen:start(?MODULE, link, Mod, {[], Args}, []).
 
@@ -114,7 +114,7 @@ start_link(Mod, Args) ->
              undefined,
      Mod :: module(),
      Args :: term(),
-     Result ::  {ok,pid()} | {error, Reason :: term()}.
+     Result ::  {ok,pid()} | ignore | {error, Reason :: term()}.
 start_link(Name, Mod, Args) ->
     gen_start(Name, Mod, Args, []).
 
@@ -126,7 +126,7 @@ start_link(Name, Mod, Args) ->
      Mod :: module(),
      Args :: term(),
      Options :: list(),
-     Result ::  {ok,pid()} | {error, Reason :: term()}.
+     Result ::  {ok,pid()} | ignore | {error, Reason :: term()}.
 start_link(Name, Mod, Args, Opts0) ->
     gen_start(Name, Mod, Args, Opts0).
 
@@ -375,7 +375,7 @@ complete_batch(#state{batch = Batch0,
                     Batch0
             end,
 
-    case catch Mod:handle_batch(Batch, Inner0) of
+    try Mod:handle_batch(Batch, Inner0) of
         {ok, Inner} ->
             State0#state{batch = [],
                          state = Inner,
@@ -402,10 +402,14 @@ complete_batch(#state{batch = Batch0,
                                          debug = Debug});
         {stop, Reason} ->
             terminate(Reason, State0),
-            exit(Reason);
-        {'EXIT', Reason} ->
-            terminate(Reason, State0),
             exit(Reason)
+    catch
+        throw:Reason ->
+            terminate(Reason, State0),
+            exit(Reason);
+        Class:Reason:Stacktrace ->
+            terminate(Reason, State0),
+            erlang:raise(Class, Reason, Stacktrace)
     end.
 
 handle_actions(Actions, Debug0) ->
@@ -421,17 +425,21 @@ handle_actions(Actions, Debug0) ->
 
 handle_continue(Continue, #state{config = #config{module = Mod},
                                  state = Inner0} = State0) ->
-    case catch Mod:handle_continue(Continue, Inner0) of
+    try Mod:handle_continue(Continue, Inner0) of
         {ok, Inner} ->
             State0#state{state = Inner};
-        {ok, Inner, {continue, Continue}} ->
-            handle_continue(Continue, State0#state{state = Inner});
+        {ok, Inner, {continue, NextContinue}} ->
+            handle_continue(NextContinue, State0#state{state = Inner});
         {stop, Reason} ->
             terminate(Reason, State0),
-            exit(Reason);
-        {'EXIT', Reason} ->
-            terminate(Reason, State0),
             exit(Reason)
+    catch
+        throw:Reason ->
+            terminate(Reason, State0),
+            exit(Reason);
+        Class:Reason:Stacktrace ->
+            terminate(Reason, State0),
+            erlang:raise(Class, Reason, Stacktrace)
     end.
 
 handle_debug_in(#state{debug = Dbg0} = State, Msg) ->
