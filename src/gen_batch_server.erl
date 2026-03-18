@@ -35,7 +35,7 @@
 
 -type from() :: {Pid :: pid(), Tag :: reference()}.
 
--type op() :: {cast, pid(), UserOp :: term()} |
+-type op() :: {cast, UserOp :: term()} |
               {call, from(), UserOp :: term()} |
               {info, UserOp :: term()}.
 
@@ -45,7 +45,7 @@
                  parent :: pid(),
                  name :: atom(),
                  module :: module(),
-                 hibernate_after = infinity :: non_neg_integer(),
+                 hibernate_after = infinity :: non_neg_integer() | infinity,
                  reversed_batch = false :: boolean()}).
 
 -record(state, {batch = [] :: [op()],
@@ -70,7 +70,9 @@
 -callback init(Args :: term()) ->
     {ok, State} |
     {ok, State, {continue, term()}} |
-    {stop, Reason :: term()}
+    ignore |
+    {stop, Reason :: term()} |
+    {error, Reason :: term()}
       when State :: term().
 
 -callback handle_batch([op()], State) ->
@@ -81,7 +83,11 @@
     {stop, Reason :: term()}
       when State :: term().
 
--callback handle_continue(Continue :: term(), State :: term()) -> term().
+-callback handle_continue(Continue :: term(), State) ->
+    {ok, State} |
+    {ok, State, {continue, term()}} |
+    {stop, Reason :: term()}
+      when State :: term().
 
 -callback terminate(Reason :: term(), State :: term()) -> term().
 
@@ -101,7 +107,7 @@
 -spec start_link(Mod, Args) -> Result when
      Mod :: module(),
      Args :: term(),
-     Result ::  {ok,pid()} | {error, Reason :: term()}.
+     Result ::  {ok,pid()} | ignore | {error, Reason :: term()}.
 start_link(Mod, Args) ->
     gen:start(?MODULE, link, Mod, {[], Args}, []).
 
@@ -112,7 +118,7 @@ start_link(Mod, Args) ->
              undefined,
      Mod :: module(),
      Args :: term(),
-     Result ::  {ok,pid()} | {error, Reason :: term()}.
+     Result ::  {ok,pid()} | ignore | {error, Reason :: term()}.
 start_link(Name, Mod, Args) ->
     gen_start(Name, Mod, Args, []).
 
@@ -124,7 +130,7 @@ start_link(Name, Mod, Args) ->
      Mod :: module(),
      Args :: term(),
      Options :: list(),
-     Result ::  {ok,pid()} | {error, Reason :: term()}.
+     Result ::  {ok,pid()} | ignore | {error, Reason :: term()}.
 start_link(Name, Mod, Args, Opts0) ->
     gen_start(Name, Mod, Args, Opts0).
 
@@ -148,21 +154,21 @@ init_it(Starter, Parent, Name0, Mod, {GBOpts, Args}, Options) ->
                    max_batch_size = MaxBatchSize,
                    hibernate_after = HibernateAfter,
                    reversed_batch = ReverseBatch},
-    case catch Mod:init(Args) of
-        {ok, Inner0} ->
+    case init_it(Mod, Args) of
+        {ok, {ok, Inner0}} ->
             proc_lib:init_ack(Starter, {ok, self()}),
             State = #state{config = Conf,
                            state = Inner0,
                            debug = Debug},
             loop_wait(State, Parent);
-        {ok, Inner0, {continue, Continue}} ->
+        {ok, {ok, Inner0, {continue, Continue}}} ->
             proc_lib:init_ack(Starter, {ok, self()}),
             State0 = #state{config = Conf,
                             state = Inner0,
                             debug = Debug},
             State = handle_continue(Continue, State0),
             loop_wait(State, Parent);
-        {stop, Reason} ->
+        {ok, {stop, Reason}} ->
             %% For consistency, we must make sure that the
             %% registered name (if any) is unregistered before
             %% the parent process is notified about the failure.
@@ -170,20 +176,29 @@ init_it(Starter, Parent, Name0, Mod, {GBOpts, Args}, Options) ->
             %% an 'already_started' error if it immediately
             %% tried starting the process again.)
             gen:unregister_name(Name0),
-            proc_lib:init_ack(Starter, {error, Reason}),
             exit(Reason);
-        % ignore ->
-        %     gen:unregister_name(Name0),
-        %     proc_lib:init_ack(Starter, ignore),
-        %     exit(normal);
-        {'EXIT', Reason} ->
+        {ok, {error, _Reason} = Error} ->
+            %% The point of this clause is that we shall have a silent/graceful
+            %% termination. The error reason will be returned to the
+            %% 'Starter' ({error, Reason}), but *no* crash report.
             gen:unregister_name(Name0),
-            proc_lib:init_ack(Starter, {error, Reason}),
-            exit(Reason);
-        Else ->
-            Error = {bad_return_value, Else},
-            proc_lib:init_ack(Starter, {error, Error}),
-            exit(Error)
+            proc_lib:init_fail(Starter, Error, {exit, normal});
+        {ok, ignore} ->
+            gen:unregister_name(Name0),
+            proc_lib:init_fail(Starter, ignore, {exit, normal});
+        {ok, Else} ->
+            gen:unregister_name(Name0),
+            exit({bad_return_value, Else});
+        {'EXIT', Class, Reason, Stacktrace} ->
+            gen:unregister_name(Name0),
+            erlang:raise(Class, Reason, Stacktrace)
+    end.
+init_it(Mod, Args) ->
+    try
+        {ok, Mod:init(Args)}
+    catch
+        throw:R -> {ok, R};
+        Class:R:S -> {'EXIT', Class, R, S}
     end.
 
 stop(Name) ->
@@ -244,7 +259,7 @@ cast_batch_msg(_) ->
 call(Name, Request) ->
     call(Name, Request, 5000).
 
--spec call(pid() | atom(), term(), non_neg_integer() | infinity) -> term().
+-spec call(server_ref(), term(), non_neg_integer() | infinity) -> term().
 call(Name, Request, Timeout) ->
     case catch gen:call(Name, '$gen_call', Request, Timeout) of
         {ok, Res} ->
@@ -336,7 +351,7 @@ loop_batched(#state{debug = Debug} = State0, Parent) ->
               State = complete_batch(State0),
               Config = State#state.config,
               NewBatchSize = max(Config#config.min_batch_size,
-                                 Config#config.batch_size / 2),
+                                 Config#config.batch_size div 2),
               loop_wait(State#state{config =
                                     Config#config{batch_size = NewBatchSize}},
                         Parent)
@@ -364,38 +379,43 @@ complete_batch(#state{batch = Batch0,
                     Batch0
             end,
 
-    case catch Mod:handle_batch(Batch, Inner0) of
-        {ok, Inner} ->
-            State0#state{batch = [],
-                         state = Inner,
-                         batch_count = 0};
-        {ok, Inner, {continue, Continue}} ->
-            handle_continue(Continue,
-                            State0#state{batch = [],
-                                         state = Inner,
-                                         batch_count = 0});
-        {ok, Actions, Inner} when is_list(Actions) ->
-            {ShouldGc, Debug} = handle_actions(Actions, Debug0),
-            State0#state{batch = [],
-                         batch_count = 0,
-                         state = Inner,
-                         needs_gc = ShouldGc,
-                         debug = Debug};
-        {ok, Actions, Inner, {continue, Continue}} when is_list(Actions) ->
-            {ShouldGc, Debug} = handle_actions(Actions, Debug0),
-            handle_continue(Continue,
-                            State0#state{batch = [],
-                                         batch_count = 0,
-                                         state = Inner,
-                                         needs_gc = ShouldGc,
-                                         debug = Debug});
-        {stop, Reason} ->
+    try Mod:handle_batch(Batch, Inner0) of
+        Result -> handle_batch_result(Result, State0, Debug0)
+    catch
+        throw:Result ->
+            handle_batch_result(Result, State0, Debug0);
+        Class:Reason:Stacktrace ->
             terminate(Reason, State0),
-            exit(Reason);
-        {'EXIT', Reason} ->
-            terminate(Reason, State0),
-            exit(Reason)
+            erlang:raise(Class, Reason, Stacktrace)
     end.
+
+handle_batch_result({ok, Inner}, State0, _Debug0) ->
+    State0#state{batch = [],
+                 state = Inner,
+                 batch_count = 0};
+handle_batch_result({ok, Inner, {continue, Continue}}, State0, _Debug0) ->
+    handle_continue(Continue,
+                    State0#state{batch = [],
+                                 state = Inner,
+                                 batch_count = 0});
+handle_batch_result({ok, Actions, Inner}, State0, Debug0) when is_list(Actions) ->
+    {ShouldGc, Debug} = handle_actions(Actions, Debug0),
+    State0#state{batch = [],
+                 batch_count = 0,
+                 state = Inner,
+                 needs_gc = ShouldGc,
+                 debug = Debug};
+handle_batch_result({ok, Actions, Inner, {continue, Continue}}, State0, Debug0) when is_list(Actions) ->
+    {ShouldGc, Debug} = handle_actions(Actions, Debug0),
+    handle_continue(Continue,
+                    State0#state{batch = [],
+                                 batch_count = 0,
+                                 state = Inner,
+                                 needs_gc = ShouldGc,
+                                 debug = Debug});
+handle_batch_result({stop, Reason}, State0, _Debug0) ->
+    terminate(Reason, State0),
+    exit(Reason).
 
 handle_actions(Actions, Debug0) ->
     lists:foldl(fun ({reply, {Pid, Tag}, Msg},
@@ -410,18 +430,23 @@ handle_actions(Actions, Debug0) ->
 
 handle_continue(Continue, #state{config = #config{module = Mod},
                                  state = Inner0} = State0) ->
-    case catch Mod:handle_continue(Continue, Inner0) of
-        {ok, Inner} ->
-            State0#state{state = Inner};
-        {ok, Inner, {continue, Continue}} ->
-            handle_continue(Continue, State0#state{state = Inner});
-        {stop, Reason} ->
+    try Mod:handle_continue(Continue, Inner0) of
+        Result -> handle_continue_result(Result, State0)
+    catch
+        throw:Result ->
+            handle_continue_result(Result, State0);
+        Class:Reason:Stacktrace ->
             terminate(Reason, State0),
-            exit(Reason);
-        {'EXIT', Reason} ->
-            terminate(Reason, State0),
-            exit(Reason)
+            erlang:raise(Class, Reason, Stacktrace)
     end.
+
+handle_continue_result({ok, Inner}, State0) ->
+    State0#state{state = Inner};
+handle_continue_result({ok, Inner, {continue, NextContinue}}, State0) ->
+    handle_continue(NextContinue, State0#state{state = Inner});
+handle_continue_result({stop, Reason}, State0) ->
+    terminate(Reason, State0),
+    exit(Reason).
 
 handle_debug_in(#state{debug = Dbg0} = State, Msg) ->
     Dbg = sys:handle_debug(Dbg0, fun write_debug/3, ?MODULE, {in, Msg}),
@@ -460,12 +485,12 @@ format_status(_Reason, [_PDict, SysState, Parent, Debug,
        {"Status", SysState},
        {"Parent", Parent},
        {"Logged Events", Log}]} |
-     case catch Mod:format_status(State) of
+     try Mod:format_status(State) of
          L when is_list(L) -> L;
-         {'EXIT', {undef, _}} ->
-             %% not implemented just return the state
-             [State];
          T -> [T]
+     catch
+         error:undef:_ -> [State];
+         _:_ -> [State]
      end].
 
 sys_get_log(Debug) ->
@@ -486,19 +511,21 @@ do_send(Dest, Msg) ->
 gen_start(undefined, Mod, Args, Opts0) ->
     %% filter out gen batch server specific options as the options type in gen
     %% is closed and dialyzer would complain.
-    {GBOpts, Opts} = lists:splitwith(fun ({Key, _}) ->
+    {GBOpts, Opts} = lists:partition(fun ({Key, _}) ->
                                              Key == max_batch_size orelse
                                              Key == min_batch_size orelse
-                                             Key == reversed_batch
+                                             Key == reversed_batch;
+                                         (_) -> false
                                      end, Opts0),
     gen:start(?MODULE, link, Mod, {GBOpts, Args}, Opts);
 gen_start(Name, Mod, Args, Opts0) ->
     %% filter out gen batch server specific options as the options type in gen
     %% is closed and dialyzer would complain.
-    {GBOpts, Opts} = lists:splitwith(fun ({Key, _}) ->
+    {GBOpts, Opts} = lists:partition(fun ({Key, _}) ->
                                              Key == max_batch_size orelse
                                              Key == min_batch_size orelse
-                                             Key == reversed_batch
+                                             Key == reversed_batch;
+                                         (_) -> false
                                      end, Opts0),
     gen:start(?MODULE, link, Name, Mod, {GBOpts, Args}, Opts).
 

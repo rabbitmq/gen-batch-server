@@ -89,13 +89,26 @@ The timeout is optional and defaults to 5000ms.
 
     Types:
         Args = term()
-        Result = {ok, State} | {stop, Reason}
-        State = term(),
+        Result = {ok, State} |
+                 {ok, State, {continue, Continue}} |
+                 ignore |
+                 {stop, Reason}
+        State = term()
+        Continue = term()
         Reason = term()
-
 
 Called whenever a `gen_batch_server` is started with the arguments provided
 to `start_link/4`.
+
+Returning `{ok, State, {continue, Continue}}` will cause `handle_continue/2`
+to be called before processing any messages.
+
+Returning `ignore` will cause `start_link` to return `ignore` and the process
+will exit normally without a crash report.
+
+Can be used in scenarios where a `gen_batch_server`
+depends on a resource that can be temporarily
+unavailable (e.g. when a Ra member runs out of disk space).
 
 #### Module:handle_batch(Batch, State) -> Result.
 
@@ -105,7 +118,11 @@ to `start_link/4`.
         Op = {cast, UserOp} |
              {call, from(), UserOp} |
              {info, UserOp}.
-        Result = {ok, State} | {ok, Actions, State} | {stop, Reason}
+        Result = {ok, State} |
+                 {ok, State, {continue, Continue}} |
+                 {ok, Actions, State} |
+                 {ok, Actions, State, {continue, Continue}} |
+                 {stop, Reason}
         State = term()
         From = {Pid :: pid(), Tag :: reference()}
         Action = {reply, From, Msg} | garbage_collect
@@ -114,6 +131,24 @@ to `start_link/4`.
 
 Called whenever a new batch is ready for processing. The implementation can
 optionally return a list of reply actions used to reply to `call` operations.
+
+#### Module:handle_continue(Continue, State) -> Result
+
+    Types:
+        Continue = term()
+        State = term()
+        Result = {ok, NewState} |
+                 {ok, NewState, {continue, NewContinue}} |
+                 {stop, Reason}
+        NewState = term()
+        NewContinue = term()
+        Reason = term()
+
+Optional. Called after `init/1` returns `{ok, State, {continue, Continue}}` or
+after `handle_batch/2` returns with a `{continue, Continue}` tuple.
+
+Most useful for post-`init/2` work that needs
+the server to be registered first.
 
 #### Module:terminate(Reason, State) -> Result
 
@@ -138,4 +173,3 @@ Optional. Used to provide a custom formatting of the user state.
 # Copyright
 
 (c) 2018-2023 Broadcom. All Rights Reserved. The term Broadcom refers to Broadcom Inc. and/or its subsidiaries.
-

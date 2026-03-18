@@ -38,7 +38,16 @@ all_tests() ->
      format_status_is_optional,
      max_batch_size,
      stop_calls_terminate,
-     process_hibernates
+     process_hibernates,
+     init_ignore,
+     init_ignore_named,
+     init_error,
+     init_stop,
+     init_bad_return,
+     init_exception,
+     handle_continue_stop,
+     handle_continue_chained,
+     opts_not_at_front
     ].
 
 groups() ->
@@ -482,6 +491,135 @@ stop_calls_terminate(Config) ->
     ?assertEqual(true, meck:called(Mod, terminate, '_')),
     ?assert(meck:validate(Mod)),
     ok.
+
+init_ignore(Config) ->
+    Mod = ?config(mod, Config),
+    process_flag(trap_exit, true),
+    meck:new(Mod, [non_strict]),
+    meck:expect(Mod, init, fun(_) -> ignore end),
+    ignore = gen_batch_server:start_link(Mod, []),
+    ?assert(meck:validate(Mod)),
+    ok.
+
+init_ignore_named(Config) ->
+    Mod = ?config(mod, Config),
+    process_flag(trap_exit, true),
+    meck:new(Mod, [non_strict]),
+    meck:expect(Mod, init, fun(_) -> ignore end),
+    ignore = gen_batch_server:start_link({local, Mod}, Mod, []),
+    %% name should be unregistered
+    ?assertEqual(undefined, whereis(Mod)),
+    ?assert(meck:validate(Mod)),
+    ok.
+
+init_error(Config) ->
+    Mod = ?config(mod, Config),
+    process_flag(trap_exit, true),
+    meck:new(Mod, [non_strict]),
+    meck:expect(Mod, init, fun(_) -> {error, no_disk} end),
+    {error, no_disk} = gen_batch_server:start_link(Mod, []),
+    ?assert(meck:validate(Mod)),
+    ok.
+
+init_stop(Config) ->
+    Mod = ?config(mod, Config),
+    process_flag(trap_exit, true),
+    meck:new(Mod, [non_strict]),
+    meck:expect(Mod, init, fun(_) -> {stop, go_away} end),
+    {error, go_away} = gen_batch_server:start_link(Mod, []),
+    ?assert(meck:validate(Mod)),
+    ok.
+
+init_bad_return(Config) ->
+    Mod = ?config(mod, Config),
+    process_flag(trap_exit, true),
+    meck:new(Mod, [non_strict]),
+    meck:expect(Mod, init, fun(_) -> wat end),
+    {error, {bad_return_value, wat}} = gen_batch_server:start_link(Mod, []),
+    ?assert(meck:validate(Mod)),
+    ok.
+
+init_exception(Config) ->
+    Mod = ?config(mod, Config),
+    process_flag(trap_exit, true),
+    meck:new(Mod, [non_strict]),
+    meck:expect(Mod, init, fun(_) -> error(boom) end),
+    Result = gen_batch_server:start_link(Mod, []),
+    %% error:boom re-raised via erlang:raise; proc_lib reports {boom, Stack}
+    ?assertMatch({error, {boom, _Stacktrace}}, Result),
+    %% meck:validate would fail here because init raised an exception,
+    %% which meck counts as an unexpected error
+    ok.
+
+handle_continue_stop(Config) ->
+    Mod = ?config(mod, Config),
+    process_flag(trap_exit, true),
+    meck:new(Mod, [non_strict]),
+    meck:expect(Mod, init, fun(_) -> {ok, #{}} end),
+    meck:expect(Mod, handle_batch, fun(_Batch, State) ->
+                                           {ok, State, {continue, go}}
+                                   end),
+    meck:expect(Mod, handle_continue, fun(go, _State) ->
+                                              {stop, from_continue}
+                                      end),
+    meck:expect(Mod, terminate, fun(from_continue, _S) -> ok end),
+    {ok, Pid} = gen_batch_server:start_link(Mod, []),
+    ok = gen_batch_server:cast(Pid, msg),
+    receive {'EXIT', Pid, from_continue} -> ok after 2000 -> exit(timeout) end,
+    timer:sleep(10),
+    ?assertEqual(true, meck:called(Mod, terminate, '_')),
+    ?assert(meck:validate(Mod)),
+    ok.
+
+handle_continue_chained(Config) ->
+    Self = self(),
+    Mod = ?config(mod, Config),
+    meck:new(Mod, [non_strict]),
+    meck:expect(Mod, init, fun(_) -> {ok, 0, {continue, first}} end),
+    meck:expect(Mod, handle_continue,
+                fun(first, N) ->
+                        Self ! {continue, first, N},
+                        {ok, N + 1, {continue, second}};
+                   (second, N) ->
+                        Self ! {continue, second, N},
+                        {ok, N + 1}
+                end),
+    {ok, _Pid} = gen_batch_server:start_link(Mod, []),
+    receive {continue, first, 0} -> ok after 2000 -> exit(timeout) end,
+    receive {continue, second, 1} -> ok after 2000 -> exit(timeout) end,
+    ?assert(meck:validate(Mod)),
+    ok.
+
+opts_not_at_front(Config) ->
+    %% Verify gen_batch_server options work even when not at the front of the list
+    Mod = ?config(mod, Config),
+    Self = self(),
+    meck:new(Mod, [non_strict]),
+    meck:expect(Mod, init, fun(_) -> {ok, #{}} end),
+    meck:expect(Mod, handle_batch,
+                fun(Ops, State) ->
+                        Self ! {batch_size, length(Ops)},
+                        {ok, State}
+                end),
+    %% hibernate_after (a gen option) comes before max_batch_size (a gb option)
+    Opts = [{hibernate_after, 5000}, {max_batch_size, 64}],
+    {ok, Pid} = gen_batch_server:start_link(undefined, Mod, [], Opts),
+    %% send more than 64 messages; with max_batch_size=64 they should be
+    %% split into multiple batches (none bigger than 64)
+    [gen_batch_server:cast(Pid, I) || I <- lists:seq(1, 200)],
+    timer:sleep(100),
+    %% collect all batch sizes
+    Sizes = collect_batch_sizes([]),
+    ?assert(lists:all(fun(S) -> S =< 64 end, Sizes)),
+    ?assert(meck:validate(Mod)),
+    ok.
+
+collect_batch_sizes(Acc) ->
+    receive
+        {batch_size, N} -> collect_batch_sizes([N | Acc])
+    after 0 ->
+              lists:reverse(Acc)
+    end.
 
 %% Utility
 wait_batch() ->
