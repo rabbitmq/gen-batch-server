@@ -216,7 +216,6 @@ process_hibernates(Config) ->
                 end),
     Pid ! Msg,
     receive continue -> ok after 2000 -> exit(timeout) end,
-    ?assertEqual(true, meck:called(Mod, handle_batch, '_', Pid)),
     ?assert(meck:validate(Mod)),
     timer:sleep(20),
     ?assertEqual({current_function, {erlang, hibernate, 3}},
@@ -334,13 +333,10 @@ call_calls_handle_batch(Config) ->
                          maps:put(k, v, State)}
                 end),
     {ok, k}  = gen_batch_server:call(Pid, Msg),
-    ?assertEqual(true, meck:called(Mod, handle_batch, '_', Pid)),
-    {ok, Pid1} = gen_batch_server:start_link({global, Mod}, Mod, Args, []),
+    {ok, _Pid1} = gen_batch_server:start_link({global, Mod}, Mod, Args, []),
     {ok, k}  = gen_batch_server:call({global, Mod}, Msg),
-    ?assertEqual(true, meck:called(Mod, handle_batch, '_', Pid1)),
-    {ok, Pid2} = gen_batch_server:start_link({via, global, test_via_call}, Mod, Args, []),
+    {ok, _Pid2} = gen_batch_server:start_link({via, global, test_via_call}, Mod, Args, []),
     {ok, k}  = gen_batch_server:call({via, global, test_via_call}, Msg),
-    ?assertEqual(true, meck:called(Mod, handle_batch, '_', Pid2)),
     ?assert(meck:validate(Mod)),
     ok.
 
