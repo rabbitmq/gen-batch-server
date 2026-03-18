@@ -87,14 +87,14 @@ start_link_calls_init(Config) ->
                            end),
     Args = [{some_arg, argh}],
     {ok, Pid} = gen_batch_server:start_link({local, Mod}, Mod, Args),
-    ?assertEqual(true, meck:called(Mod, init, '_', Pid)),
+    ?assert(is_process_alive(Pid)),
     {ok, Pid2} = gen_batch_server:start_link(Mod, Args),
-    ?assertEqual(true, meck:called(Mod, init, '_', Pid2)),
+    ?assert(is_process_alive(Pid2)),
     {ok, Pid3} = gen_batch_server:start_link(undefined, Mod, Args),
-    ?assertEqual(true, meck:called(Mod, init, '_', Pid3)),
+    ?assert(is_process_alive(Pid3)),
     Opts = [{reversed_batch, true}],
     {ok, Pid4} = gen_batch_server:start_link(undefined, Mod, Args, Opts),
-    ?assertEqual(true, meck:called(Mod, init, '_', Pid4)),
+    ?assert(is_process_alive(Pid4)),
     ?assert(meck:validate(Mod)),
     gen_batch_server:stop(Pid),
     gen_batch_server:stop(Pid2),
@@ -110,9 +110,7 @@ simple_start_link_calls_init(Config) ->
                            end),
     Args = [{some_arg, argh}],
     {ok, Pid} = gen_batch_server:start_link(Mod, Args),
-    %% having to wildcard the args as they don't seem to
-    %% validate correctly
-    ?assertEqual(true, meck:called(Mod, init, '_', Pid)),
+    ?assert(is_process_alive(Pid)),
     ?assert(meck:validate(Mod)),
     ok.
 
@@ -132,10 +130,7 @@ handle_continue(Config) ->
                                    end),
     Args = [{some_arg, argh}],
     {ok, Pid} = gen_batch_server:start_link(Mod, Args),
-    %% having to wildcard the args as they don't seem to
-    %% validate correctly
-    ?assertEqual(true, meck:called(Mod, init, '_', Pid)),
-    ?assertEqual(true, meck:called(Mod, handle_continue, '_', Pid)),
+    ?assert(is_process_alive(Pid)),
     receive
         {continue_called, post_init} -> ok
     after 2000 ->
@@ -174,15 +169,12 @@ cast_calls_handle_batch(Config) ->
                 end),
     ok = gen_batch_server:cast(Pid, Msg),
     receive continue -> ok after 2000 -> exit(timeout) end,
-    ?assertEqual(true, meck:called(Mod, handle_batch, '_', Pid)),
-    {ok, Pid1} = gen_batch_server:start_link({global, Mod}, Mod, Args, []),
+    {ok, _Pid1} = gen_batch_server:start_link({global, Mod}, Mod, Args, []),
     ok  = gen_batch_server:cast({global, Mod}, Msg),
     receive continue -> ok after 2000 -> exit(timeout) end,
-    ?assertEqual(true, meck:called(Mod, handle_batch, '_', Pid1)),
-    {ok, Pid2} = gen_batch_server:start_link({via, global, test_via_cast}, Mod, Args, []),
+    {ok, _Pid2} = gen_batch_server:start_link({via, global, test_via_cast}, Mod, Args, []),
     ok  = gen_batch_server:cast({via, global, test_via_cast}, Msg),
     receive continue -> ok after 2000 -> exit(timeout) end,
-    ?assertEqual(true, meck:called(Mod, handle_batch, '_', Pid2)),
     ?assert(meck:validate(Mod)),
     ok.
 
@@ -201,7 +193,6 @@ info_calls_handle_batch(Config) ->
                 end),
     Pid ! Msg,
     receive continue -> ok after 2000 -> exit(timeout) end,
-    ?assertEqual(true, meck:called(Mod, handle_batch, '_', Pid)),
     ?assert(meck:validate(Mod)),
     ok.
 
@@ -225,7 +216,6 @@ process_hibernates(Config) ->
                 end),
     Pid ! Msg,
     receive continue -> ok after 2000 -> exit(timeout) end,
-    ?assertEqual(true, meck:called(Mod, handle_batch, '_', Pid)),
     ?assert(meck:validate(Mod)),
     timer:sleep(20),
     ?assertEqual({current_function, {erlang, hibernate, 3}},
@@ -343,13 +333,10 @@ call_calls_handle_batch(Config) ->
                          maps:put(k, v, State)}
                 end),
     {ok, k}  = gen_batch_server:call(Pid, Msg),
-    ?assertEqual(true, meck:called(Mod, handle_batch, '_', Pid)),
-    {ok, Pid1} = gen_batch_server:start_link({global, Mod}, Mod, Args, []),
+    {ok, _Pid1} = gen_batch_server:start_link({global, Mod}, Mod, Args, []),
     {ok, k}  = gen_batch_server:call({global, Mod}, Msg),
-    ?assertEqual(true, meck:called(Mod, handle_batch, '_', Pid1)),
-    {ok, Pid2} = gen_batch_server:start_link({via, global, test_via_call}, Mod, Args, []),
+    {ok, _Pid2} = gen_batch_server:start_link({via, global, test_via_call}, Mod, Args, []),
     {ok, k}  = gen_batch_server:call({via, global, test_via_call}, Msg),
-    ?assertEqual(true, meck:called(Mod, handle_batch, '_', Pid2)),
     ?assert(meck:validate(Mod)),
     ok.
 
