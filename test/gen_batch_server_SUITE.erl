@@ -38,7 +38,12 @@ all_tests() ->
      format_status_is_optional,
      max_batch_size,
      stop_calls_terminate,
-     process_hibernates
+     process_hibernates,
+     init_ignore,
+     init_ignore_named,
+     init_error,
+     init_bad_return,
+     init_exception
     ].
 
 groups() ->
@@ -481,6 +486,53 @@ stop_calls_terminate(Config) ->
     timer:sleep(10),
     ?assertEqual(true, meck:called(Mod, terminate, '_')),
     ?assert(meck:validate(Mod)),
+    ok.
+
+init_ignore(Config) ->
+    Mod = ?config(mod, Config),
+    process_flag(trap_exit, true),
+    meck:new(Mod, [non_strict]),
+    meck:expect(Mod, init, fun(_) -> ignore end),
+    ignore = gen_batch_server:start_link(Mod, []),
+    ?assert(meck:validate(Mod)),
+    ok.
+
+init_ignore_named(Config) ->
+    Mod = ?config(mod, Config),
+    process_flag(trap_exit, true),
+    meck:new(Mod, [non_strict]),
+    meck:expect(Mod, init, fun(_) -> ignore end),
+    ignore = gen_batch_server:start_link({local, Mod}, Mod, []),
+    %% name should be unregistered
+    ?assertEqual(undefined, whereis(Mod)),
+    ?assert(meck:validate(Mod)),
+    ok.
+
+init_error(Config) ->
+    Mod = ?config(mod, Config),
+    process_flag(trap_exit, true),
+    meck:new(Mod, [non_strict]),
+    meck:expect(Mod, init, fun(_) -> {error, no_disk} end),
+    {error, no_disk} = gen_batch_server:start_link(Mod, []),
+    ?assert(meck:validate(Mod)),
+    ok.
+
+init_bad_return(Config) ->
+    Mod = ?config(mod, Config),
+    process_flag(trap_exit, true),
+    meck:new(Mod, [non_strict]),
+    meck:expect(Mod, init, fun(_) -> wat end),
+    {error, {bad_return_value, wat}} = gen_batch_server:start_link(Mod, []),
+    ok.
+
+init_exception(Config) ->
+    Mod = ?config(mod, Config),
+    process_flag(trap_exit, true),
+    meck:new(Mod, [non_strict]),
+    meck:expect(Mod, init, fun(_) -> error(boom) end),
+    Result = gen_batch_server:start_link(Mod, []),
+    %% error:boom re-raised via erlang:raise; proc_lib reports {boom, Stack}
+    ?assertMatch({error, {boom, _Stacktrace}}, Result),
     ok.
 
 %% Utility
