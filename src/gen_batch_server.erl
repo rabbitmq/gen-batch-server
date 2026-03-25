@@ -289,6 +289,7 @@ loop_wait(#state{config = #config{hibernate_after = Hib}} = State00, Parent) ->
                                           ?MODULE, State0#state.debug, State0);
                 {'EXIT', Parent, Reason} ->
                     terminate(Reason, State0),
+                    flush_mailbox(),
                     exit(Reason);
                 _ ->
                     enter_loop_batched(Msg, Parent, State0)
@@ -343,6 +344,7 @@ loop_batched(#state{debug = Debug} = State0, Parent) ->
                                           ?MODULE, Debug, State0);
                 {'EXIT', Parent, Reason} ->
                     terminate(Reason, State0),
+                    flush_mailbox(),
                     exit(Reason);
                 _ ->
                     enter_loop_batched(Msg, Parent, State0)
@@ -386,6 +388,7 @@ complete_batch(#state{batch = Batch0,
             handle_batch_result(Result, State0, Debug0);
         Class:Reason:Stacktrace ->
             terminate(Reason, State0),
+            flush_mailbox(),
             erlang:raise(Class, Reason, safe_stacktrace(Stacktrace))
     end.
 
@@ -415,6 +418,7 @@ handle_batch_result({ok, Actions, Inner, {continue, Continue}}, State0, Debug0) 
                                  debug = Debug});
 handle_batch_result({stop, Reason}, State0, _Debug0) ->
     terminate(Reason, State0),
+    flush_mailbox(),
     exit(Reason).
 
 handle_actions(Actions, Debug0) ->
@@ -437,6 +441,7 @@ handle_continue(Continue, #state{config = #config{module = Mod},
             handle_continue_result(Result, State0);
         Class:Reason:Stacktrace ->
             terminate(Reason, State0),
+            flush_mailbox(),
             erlang:raise(Class, Reason, safe_stacktrace(Stacktrace))
     end.
 
@@ -446,6 +451,7 @@ handle_continue_result({ok, Inner, {continue, NextContinue}}, State0) ->
     handle_continue(NextContinue, State0#state{state = Inner});
 handle_continue_result({stop, Reason}, State0) ->
     terminate(Reason, State0),
+    flush_mailbox(),
     exit(Reason).
 
 handle_debug_in(#state{debug = Dbg0} = State, Msg) ->
@@ -467,6 +473,7 @@ system_continue(Parent, Debug, State) ->
 -spec system_terminate(term(), pid(), list(), term()) -> no_return().
 system_terminate(Reason, _Parent, _Debug, State) ->
     terminate(Reason, State),
+    flush_mailbox(),
     exit(Reason).
 
 system_get_state(State) ->
@@ -498,8 +505,6 @@ sys_get_log(Debug) ->
 
 write_debug(Dev, Event, Name) ->
     io:format(Dev, "~p event = ~p~n", [Name, Event]).
-
-%% Send function
 
 do_send(Dest, Msg) ->
     try erlang:send(Dest, Msg)
@@ -538,3 +543,11 @@ safe_stacktrace(Stacktrace) ->
                  (Frame) ->
                       Frame
               end, Stacktrace).
+
+%% Flush all messages from the mailbox. This prevents proc_lib crash reports
+%% from pretty-printing potentially large messages (e.g. WAL write commands
+%% containing binary payloads), which can cause unbounded memory growth.
+flush_mailbox() ->
+    receive _ -> flush_mailbox()
+    after 0 -> ok
+    end.
