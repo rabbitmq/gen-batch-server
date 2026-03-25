@@ -1,8 +1,32 @@
 # Change Log
 
-## Changes Between 0.8.4 and 0.9.0 (in development)
+## Changes Between 0.9.2 and 0.10.0 (in development)
 
-No changes yet.
+(no changes yet)
+
+## Changes Between 0.9.1 and 0.9.2 (Mar 25, 2026)
+
+### Bug Fixes
+
+ * Erlang process mailbox is now flushed before exiting to prevent OOM events during crash report formatting
+   done by parts of Erlang/OTP
+ * Strip function arguments from stacktrace to avoid OOM on crash
+
+## Changes Between 0.8.4 and 0.9.0
+
+### Enhancements
+
+ * Updated `init_it` to match modern `gen_server:init_it` behavior
+ * Reduced delta with `gen_server` further, refactored internals
+ * Use `try catch` which is better optimized by modern Erlang's JIT
+
+ ### Bug Fixes
+
+ * Enforce `rebar3_hex` 7.0+ for Erlang 26+ compatibility
+
+### Minimum Supported Erlang Version Bump
+
+The library now requires OTP 26+.
 
 ## Changes Between 0.8.3 and 0.8.4 (July 20th, 2020)
 
