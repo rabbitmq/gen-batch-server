@@ -191,7 +191,7 @@ init_it(Starter, Parent, Name0, Mod, {GBOpts, Args}, Options) ->
             exit({bad_return_value, Else});
         {'EXIT', Class, Reason, Stacktrace} ->
             gen:unregister_name(Name0),
-            erlang:raise(Class, Reason, Stacktrace)
+            erlang:raise(Class, Reason, safe_stacktrace(Stacktrace))
     end.
 init_it(Mod, Args) ->
     try
@@ -386,7 +386,7 @@ complete_batch(#state{batch = Batch0,
             handle_batch_result(Result, State0, Debug0);
         Class:Reason:Stacktrace ->
             terminate(Reason, State0),
-            erlang:raise(Class, Reason, Stacktrace)
+            erlang:raise(Class, Reason, safe_stacktrace(Stacktrace))
     end.
 
 handle_batch_result({ok, Inner}, State0, _Debug0) ->
@@ -437,7 +437,7 @@ handle_continue(Continue, #state{config = #config{module = Mod},
             handle_continue_result(Result, State0);
         Class:Reason:Stacktrace ->
             terminate(Reason, State0),
-            erlang:raise(Class, Reason, Stacktrace)
+            erlang:raise(Class, Reason, safe_stacktrace(Stacktrace))
     end.
 
 handle_continue_result({ok, Inner}, State0) ->
@@ -529,3 +529,12 @@ gen_start(Name, Mod, Args, Opts0) ->
                                      end, Opts0),
     gen:start(?MODULE, link, Name, Mod, {GBOpts, Args}, Opts).
 
+
+%% Strip function arguments from stacktrace frames to avoid formatting
+%% potentially huge terms.
+safe_stacktrace(Stacktrace) ->
+    lists:map(fun({M, F, Args, Info}) when is_list(Args) ->
+                      {M, F, length(Args), Info};
+                 (Frame) ->
+                      Frame
+              end, Stacktrace).
