@@ -10,7 +10,7 @@
 
  * Erlang process mailbox is now flushed before exiting to prevent OOM events during crash report formatting
    done by parts of Erlang/OTP
- * Strip function arguments from stacktrace to avoid OOM on crash
+ * Strip function arguments from stacktrace to prevent the same OOM events during crash report formatting
 
 ## Changes Between 0.8.4 and 0.9.0
 
