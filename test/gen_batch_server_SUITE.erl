@@ -50,7 +50,11 @@ all_tests() ->
      opts_not_at_front,
      flush_mailbox_on_terminate_disabled,
      flush_mailbox_on_terminate_enabled,
-     aimd_batch_size_growth
+     aimd_batch_size_growth,
+     send_request_receive_response,
+     send_request_wait_response,
+     send_request_check_response,
+     send_request_collection
     ].
 
 groups() ->
@@ -707,6 +711,89 @@ flush_mailbox_on_terminate_enabled(Config) ->
                          Summary)
     after 2000 -> exit(summary_timeout)
     end,
+    ?assert(meck:validate(Mod)),
+    ok.
+
+send_request_receive_response(Config) ->
+    Mod = ?config(mod, Config),
+    meck:new(Mod, [non_strict]),
+    meck:expect(Mod, init, fun(Init) -> {ok, Init} end),
+    Args = #{},
+    {ok, Pid} = gen_batch_server:start_link({local, Mod}, Mod, Args, []),
+    meck:expect(Mod, handle_batch,
+                fun([{call, From, {put, k, v}}], State) ->
+                        {ok, [{reply, From, {ok, k}}],
+                         maps:put(k, v, State)}
+                end),
+    ReqId = gen_batch_server:send_request(Pid, {put, k, v}),
+    ?assertMatch({reply, {ok, k}},
+                 gen_batch_server:receive_response(ReqId, 5000)),
+    ?assert(meck:validate(Mod)),
+    ok.
+
+send_request_wait_response(Config) ->
+    Mod = ?config(mod, Config),
+    meck:new(Mod, [non_strict]),
+    meck:expect(Mod, init, fun(Init) -> {ok, Init} end),
+    Args = #{},
+    {ok, Pid} = gen_batch_server:start_link({local, Mod}, Mod, Args, []),
+    meck:expect(Mod, handle_batch,
+                fun([{call, From, ping}], State) ->
+                        {ok, [{reply, From, pong}], State}
+                end),
+    ReqId = gen_batch_server:send_request(Pid, ping),
+    ?assertMatch({reply, pong},
+                 gen_batch_server:wait_response(ReqId, 5000)),
+    ?assert(meck:validate(Mod)),
+    ok.
+
+send_request_check_response(Config) ->
+    Mod = ?config(mod, Config),
+    meck:new(Mod, [non_strict]),
+    meck:expect(Mod, init, fun(Init) -> {ok, Init} end),
+    Args = #{},
+    {ok, Pid} = gen_batch_server:start_link({local, Mod}, Mod, Args, []),
+    meck:expect(Mod, handle_batch,
+                fun([{call, From, hello}], State) ->
+                        {ok, [{reply, From, world}], State}
+                end),
+    ReqId = gen_batch_server:send_request(Pid, hello),
+    receive
+        Msg ->
+            ?assertMatch({reply, world},
+                         gen_batch_server:check_response(Msg, ReqId))
+    after 5000 ->
+              exit(timeout)
+    end,
+    ?assert(meck:validate(Mod)),
+    ok.
+
+send_request_collection(Config) ->
+    Mod = ?config(mod, Config),
+    meck:new(Mod, [non_strict]),
+    meck:expect(Mod, init, fun(Init) -> {ok, Init} end),
+    Args = #{},
+    {ok, Pid} = gen_batch_server:start_link({local, Mod}, Mod, Args, []),
+    meck:expect(Mod, handle_batch,
+                fun(Ops, State) ->
+                        Actions = [{reply, From, {ok, N}}
+                                   || {call, From, {echo, N}} <- Ops],
+                        {ok, Actions, State}
+                end),
+    Col0 = gen_batch_server:reqids_new(),
+    ?assertEqual(0, gen_batch_server:reqids_size(Col0)),
+    Col1 = gen_batch_server:send_request(Pid, {echo, 1}, first, Col0),
+    Col2 = gen_batch_server:send_request(Pid, {echo, 2}, second, Col1),
+    ?assertEqual(2, gen_batch_server:reqids_size(Col2)),
+    ?assertEqual(2, length(gen_batch_server:reqids_to_list(Col2))),
+    {Result1, Label1, Col3} =
+        gen_batch_server:receive_response(Col2, 5000, true),
+    {Result2, Label2, Col4} =
+        gen_batch_server:receive_response(Col3, 5000, true),
+    ?assertEqual(0, gen_batch_server:reqids_size(Col4)),
+    Collected = lists:sort([{Label1, Result1}, {Label2, Result2}]),
+    ?assertEqual([{first, {reply, {ok, 1}}}, {second, {reply, {ok, 2}}}],
+                 Collected),
     ?assert(meck:validate(Mod)),
     ok.
 

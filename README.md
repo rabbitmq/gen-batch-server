@@ -107,6 +107,93 @@ Makes a synchronous call to the `gen_batch_server` and waits for the response pr
 by `Module:handle_batch/2`.
 The timeout is optional and defaults to 5000ms.
 
+#### send_request(ServerRef, Request) -> ReqId
+
+    Types:
+        ServerRef = pid() | {Name :: atom(), node()} | Name :: atom()
+        Request = term()
+        ReqId = request_id()
+
+Sends an asynchronous call request to the `gen_batch_server`. Returns a request
+identifier `ReqId` that can be used with `wait_response/2`, `receive_response/2`,
+or `check_response/2` to collect the reply later. The request appears as a
+`{call, From, Request}` operation in `Module:handle_batch/2`.
+
+#### send_request(ServerRef, Request, Label, ReqIdCollection) -> NewReqIdCollection
+
+    Types:
+        ServerRef = pid() | {Name :: atom(), node()} | Name :: atom()
+        Request = term()
+        Label = term()
+        ReqIdCollection = request_id_collection()
+        NewReqIdCollection = request_id_collection()
+
+Like `send_request/2`, but stores the request identifier in a collection
+associated with `Label`. The collection can later be passed to
+`receive_response/3`, `wait_response/3`, or `check_response/3`.
+
+#### wait_response(ReqId, WaitTime) -> Result
+#### receive_response(ReqId, Timeout) -> Result
+
+    Types:
+        ReqId = request_id()
+        WaitTime = Timeout = timeout() | {abs, integer()}
+        Result = {reply, Reply} | {error, {Reason, ServerRef}} | timeout
+
+Wait for a response to an async request made with `send_request/2`.
+`receive_response` abandons the request on timeout (late replies are dropped),
+while `wait_response` keeps the monitor so you can retry.
+
+#### wait_response(ReqIdCollection, WaitTime, Delete) -> Result
+#### receive_response(ReqIdCollection, Timeout, Delete) -> Result
+
+    Types:
+        ReqIdCollection = request_id_collection()
+        WaitTime = Timeout = timeout() | {abs, integer()}
+        Delete = boolean()
+        Result = {Response, Label, NewReqIdCollection} | no_request | timeout
+        Response = {reply, Reply} | {error, {Reason, ServerRef}}
+
+Collection variants. Returns the response along with the `Label` associated
+with the request and an updated collection.
+
+#### check_response(Msg, ReqId) -> Result
+
+    Types:
+        Msg = term()
+        ReqId = request_id()
+        Result = {reply, Reply} | {error, {Reason, ServerRef}} | no_reply
+
+Check whether a received message `Msg` is a response to the request `ReqId`.
+Returns `no_reply` if the message does not correspond to this request.
+
+#### check_response(Msg, ReqIdCollection, Delete) -> Result
+
+    Types:
+        Msg = term()
+        ReqIdCollection = request_id_collection()
+        Delete = boolean()
+        Result = {Response, Label, NewReqIdCollection} | no_request | no_reply
+        Response = {reply, Reply} | {error, {Reason, ServerRef}}
+
+Collection variant of `check_response/2`.
+
+#### reqids_new() -> NewReqIdCollection
+
+Creates a new empty request identifier collection.
+
+#### reqids_add(ReqId, Label, ReqIdCollection) -> NewReqIdCollection
+
+Stores `ReqId` with an associated `Label` in the collection.
+
+#### reqids_size(ReqIdCollection) -> non_neg_integer()
+
+Returns the number of request identifiers in the collection.
+
+#### reqids_to_list(ReqIdCollection) -> [{ReqId, Label}]
+
+Converts the collection to a list of `{ReqId, Label}` pairs.
+
 #### Module:init(Args) -> Result
 
     Types:
