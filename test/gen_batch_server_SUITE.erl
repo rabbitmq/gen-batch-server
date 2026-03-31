@@ -47,7 +47,9 @@ all_tests() ->
      init_exception,
      handle_continue_stop,
      handle_continue_chained,
-     opts_not_at_front
+     opts_not_at_front,
+     flush_mailbox_on_terminate_disabled,
+     flush_mailbox_on_terminate_enabled
     ].
 
 groups() ->
@@ -607,6 +609,77 @@ collect_batch_sizes(Acc) ->
     after 0 ->
               lists:reverse(Acc)
     end.
+
+flush_mailbox_on_terminate_disabled(Config) ->
+    %% Default behaviour: flush_mailbox_on_terminate is false, so no
+    %% mailbox_summary entry should appear in the process dictionary.
+    Mod = ?config(mod, Config),
+    Self = self(),
+    process_flag(trap_exit, true),
+    meck:new(Mod, [non_strict]),
+    meck:expect(Mod, init, fun(_) -> {ok, #{}} end),
+    meck:expect(Mod, handle_batch,
+                fun([{cast, trigger_stop}], _State) ->
+                        %% Inject 3 messages into our own mailbox so there is
+                        %% something pending when we stop.
+                        self() ! pending_msg_1,
+                        self() ! pending_msg_2,
+                        self() ! pending_msg_3,
+                        {stop, because}
+                end),
+    meck:expect(Mod, terminate,
+                fun(because, _State) ->
+                        %% flush disabled: key must be absent
+                        Self ! {summary, erlang:get(mailbox_summary)},
+                        ok
+                end),
+    {ok, Pid} = gen_batch_server:start_link(Mod, []),
+    ok = gen_batch_server:cast(Pid, trigger_stop),
+    receive {'EXIT', Pid, because} -> ok after 2000 -> exit(timeout) end,
+    receive
+        {summary, Summary} ->
+            ?assertEqual(undefined, Summary)
+    after 2000 -> exit(summary_timeout)
+    end,
+    ?assert(meck:validate(Mod)),
+    ok.
+
+flush_mailbox_on_terminate_enabled(Config) ->
+    %% With {flush_mailbox_on_terminate, {true, 2}}, the summary must contain
+    %% the first 2 pending messages and the correct total count.
+    Mod = ?config(mod, Config),
+    Self = self(),
+    process_flag(trap_exit, true),
+    meck:new(Mod, [non_strict]),
+    meck:expect(Mod, init, fun(_) -> {ok, #{}} end),
+    meck:expect(Mod, handle_batch,
+                fun([{cast, trigger_stop}], _State) ->
+                        %% Inject 5 messages so total > SummaryCount (2).
+                        self() ! pending_msg_1,
+                        self() ! pending_msg_2,
+                        self() ! pending_msg_3,
+                        self() ! pending_msg_4,
+                        self() ! pending_msg_5,
+                        {stop, because}
+                end),
+    meck:expect(Mod, terminate,
+                fun(because, _State) ->
+                        %% flush ran before us; summary must be present
+                        Self ! {summary, erlang:get(mailbox_summary)},
+                        ok
+                end),
+    Opts = [{flush_mailbox_on_terminate, {true, 2}}],
+    {ok, Pid} = gen_batch_server:start_link(undefined, Mod, [], Opts),
+    ok = gen_batch_server:cast(Pid, trigger_stop),
+    receive {'EXIT', Pid, because} -> ok after 2000 -> exit(timeout) end,
+    receive
+        {summary, Summary} ->
+            ?assertMatch(#{total := 5, messages := [pending_msg_1, pending_msg_2]},
+                         Summary)
+    after 2000 -> exit(summary_timeout)
+    end,
+    ?assert(meck:validate(Mod)),
+    ok.
 
 %% Utility
 wait_batch() ->
