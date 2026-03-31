@@ -1,0 +1,126 @@
+#!/usr/bin/env escript
+%% -*- erlang -*-
+%%! -pa _build/default/lib/gen_batch_server/ebin -pa bench/ebin
+
+%% Compares exponential (default) vs AIMD batch size growth strategies.
+%%
+%% The simulated workload models an fsync-backed log writer: each batch
+%% incurs a fixed base cost (the fsync itself) plus a variable cost that
+%% scales with the total bytes in the batch (the write).  The worker
+%% process uses off_heap message_queue_data so large binaries are not
+%% copied into the process heap on receive.
+%%
+%% Prerequisites (from the project root):
+%%
+%%   rebar3 compile
+%%   erlc -o bench/ebin bench/gbs_bench_worker.erl
+%%   escript bench/benchmark
+
+-define(NUM_MESSAGES,  100_000).
+-define(PAYLOAD_SIZE,  4096).     %% 4 KB per message
+-define(BASE_DELAY_US, 3000).     %% 3 ms fixed fsync overhead per batch
+-define(US_PER_MB,     3000).     %% 3 ms per MB of batch data (~330 MB/s disk)
+-define(MIN_BATCH,     32).
+-define(MAX_BATCH,     8192).
+
+main(_Args) ->
+    Payload = binary:copy(<<$x>>, ?PAYLOAD_SIZE),
+
+    Sep = string:copies("-", 68),
+    io:format("~n~s~n", [Sep]),
+    io:format("gen_batch_server benchmark~n"),
+    io:format("  messages      : ~b~n",   [?NUM_MESSAGES]),
+    io:format("  payload       : ~b B~n",  [?PAYLOAD_SIZE]),
+    io:format("  base delay    : ~b us  +  ~b us/MB of batch data~n",
+              [?BASE_DELAY_US, ?US_PER_MB]),
+    io:format("  min_batch     : ~b  |  max_batch : ~b~n",
+              [?MIN_BATCH, ?MAX_BATCH]),
+    io:format("~s~n~n", [Sep]),
+
+    run_scenario("exponential (default)", exponential,  Payload),
+    run_scenario("AIMD  step=32",         {aimd, 32},   Payload),
+    run_scenario("AIMD  step=64",         {aimd, 64},   Payload),
+    run_scenario("AIMD  step=128",        {aimd, 128},  Payload),
+    io:format("~s~n", [Sep]).
+
+%% -------------------------------------------------------------------------
+
+run_scenario(Label, Growth, Payload) ->
+    Self = self(),
+    Opts = [{min_batch_size,    ?MIN_BATCH},
+            {max_batch_size,    ?MAX_BATCH},
+            {batch_size_growth, Growth}],
+    {ok, Pid} = gen_batch_server:start_link(
+                  undefined, gbs_bench_worker,
+                  #{base_delay_us => ?BASE_DELAY_US,
+                    us_per_mb     => ?US_PER_MB,
+                    payload_size  => ?PAYLOAD_SIZE,
+                    collector     => Self},
+                  Opts),
+
+    T0 = erlang:monotonic_time(microsecond),
+
+    [gen_batch_server:cast(Pid, Payload) || _ <- lists:seq(1, ?NUM_MESSAGES)],
+
+    %% Synchronous barrier: returns only after every preceding cast has
+    %% been handled.  The reply carries final GC stats from the worker.
+    {ok, GcStats} = gen_batch_server:call(Pid, sync, 300_000),
+
+    T1 = erlang:monotonic_time(microsecond),
+
+    gen_batch_server:stop(Pid),
+
+    {Sizes, HeapPerBatch} = drain_batch_msgs([], []),
+    ElapsedMs = (T1 - T0) / 1000,
+
+    print_results(Label, ElapsedMs, Sizes, GcStats, HeapPerBatch),
+
+    timer:sleep(500).
+
+drain_batch_msgs(SizeAcc, HeapAcc) ->
+    receive
+        {batch, N, HeapWords} ->
+            drain_batch_msgs([N | SizeAcc], [HeapWords | HeapAcc])
+    after 0 ->
+        {lists:reverse(SizeAcc), lists:reverse(HeapAcc)}
+    end.
+
+print_results(Label, ElapsedMs, Sizes,
+              #{minor_gcs := MinorGcs, major_gcs := MajorGcs,
+                max_heap := MaxHeap},
+              HeapPerBatch) ->
+    NumBatches  = length(Sizes),
+    TotalMsgs   = lists:sum(Sizes),
+    Sorted      = lists:sort(Sizes),
+    BatchMin    = hd(Sorted),
+    BatchMax    = lists:last(Sorted),
+    BatchMean   = TotalMsgs / max(1, NumBatches),
+    P50         = percentile(Sorted, 0.50),
+    P95         = percentile(Sorted, 0.95),
+    Throughput  = round(?NUM_MESSAGES / (ElapsedMs / 1000)),
+
+    HeapSorted = lists:sort(HeapPerBatch),
+    HeapMax    = lists:last(HeapSorted),
+    HeapMean   = lists:sum(HeapPerBatch) / max(1, length(HeapPerBatch)),
+    HeapP50    = percentile(HeapSorted, 0.50),
+
+    WordSize   = erlang:system_info(wordsize),
+
+    io:format("  ~s~n", [Label]),
+    io:format("    elapsed    : ~.1f ms~n",     [ElapsedMs]),
+    io:format("    throughput : ~b msg/s~n",     [Throughput]),
+    io:format("    batches    : ~b  (total msgs accounted: ~b)~n",
+              [NumBatches, TotalMsgs]),
+    io:format("    batch size : min=~b  mean=~.1f  p50=~b  p95=~b  max=~b~n",
+              [BatchMin, BatchMean, P50, P95, BatchMax]),
+    io:format("    GC         : minor=~b  major=~b~n",
+              [MinorGcs, MajorGcs]),
+    io:format("    heap peak  : ~b words (~.1f KB)~n",
+              [MaxHeap, MaxHeap * WordSize / 1024]),
+    io:format("    heap/batch : mean=~b  p50=~b  max=~b words~n~n",
+              [round(HeapMean), HeapP50, HeapMax]).
+
+percentile(Sorted, P) ->
+    N   = length(Sorted),
+    Idx = max(1, round(N * P)),
+    lists:nth(Idx, Sorted).

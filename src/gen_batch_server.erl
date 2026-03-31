@@ -47,7 +47,8 @@
                  module :: module(),
                  hibernate_after = infinity :: non_neg_integer() | infinity,
                  reversed_batch = false :: boolean(),
-                 flush_mailbox_on_terminate = false :: false | {true, non_neg_integer()}}).
+                 flush_mailbox_on_terminate = false :: false | {true, non_neg_integer()},
+                 batch_size_growth = exponential :: exponential | {aimd, pos_integer()}}).
 
 -record(state, {batch = [] :: [op()],
                 batch_count = 0 :: non_neg_integer(),
@@ -55,8 +56,6 @@
                 state :: term(),
                 needs_gc = false :: boolean(),
                 debug :: list()}).
-
-% -type state() :: #state{}.
 
 -export_type([from/0, op/0,
               action/0, server_ref/0]).
@@ -148,6 +147,8 @@ init_it(Starter, Parent, Name0, Mod, {GBOpts, Args}, Options) ->
                                        ?MIN_MAX_BATCH_SIZE),
     ReverseBatch = proplists:get_value(reversed_batch, GBOpts, false),
     FlushMailbox = proplists:get_value(flush_mailbox_on_terminate, GBOpts, false),
+    BatchSizeGrowth = proplists:get_value(batch_size_growth, GBOpts,
+                                          exponential),
     Conf = #config{module = Mod,
                    parent = Parent,
                    name = Name,
@@ -156,7 +157,8 @@ init_it(Starter, Parent, Name0, Mod, {GBOpts, Args}, Options) ->
                    max_batch_size = MaxBatchSize,
                    hibernate_after = HibernateAfter,
                    reversed_batch = ReverseBatch,
-                   flush_mailbox_on_terminate = FlushMailbox},
+                   flush_mailbox_on_terminate = FlushMailbox,
+                   batch_size_growth = BatchSizeGrowth},
     case init_it(Mod, Args) of
         {ok, {ok, Inner0}} ->
             proc_lib:init_ack(Starter, {ok, self()}),
@@ -329,13 +331,19 @@ enter_loop_batched(Msg, Parent, State0) ->
     loop_batched(append_msg(Msg, State), Parent).
 
 loop_batched(#state{config = #config{batch_size = BatchSize,
-                                     max_batch_size = Max} = Config,
+                                     max_batch_size = Max,
+                                     batch_size_growth = Growth} = Config,
                     batch_count = BatchCount} = State0,
              Parent) when BatchCount >= BatchSize ->
     % complete batch after seeing batch_size writes
     State = complete_batch(State0),
-    % grow max batch size
-    NewBatchSize = min(Max, BatchSize * 2),
+    % grow batch size according to the configured strategy
+    NewBatchSize = case Growth of
+                       exponential ->
+                           min(Max, BatchSize * 2);
+                       {aimd, Step} ->
+                           min(Max, BatchSize + Step)
+                   end,
     loop_wait(State#state{config = Config#config{batch_size = NewBatchSize}},
               Parent);
 loop_batched(#state{debug = Debug} = State0, Parent) ->
@@ -523,7 +531,8 @@ gen_start(undefined, Mod, Args, Opts0) ->
                                              Key == max_batch_size orelse
                                              Key == min_batch_size orelse
                                              Key == reversed_batch orelse
-                                             Key == flush_mailbox_on_terminate;
+                                             Key == flush_mailbox_on_terminate orelse
+                                             Key == batch_size_growth;
                                          (_) -> false
                                      end, Opts0),
     gen:start(?MODULE, link, Mod, {GBOpts, Args}, Opts);
@@ -534,7 +543,8 @@ gen_start(Name, Mod, Args, Opts0) ->
                                              Key == max_batch_size orelse
                                              Key == min_batch_size orelse
                                              Key == reversed_batch orelse
-                                             Key == flush_mailbox_on_terminate;
+                                             Key == flush_mailbox_on_terminate orelse
+                                             Key == batch_size_growth;
                                          (_) -> false
                                      end, Opts0),
     gen:start(?MODULE, link, Name, Mod, {GBOpts, Args}, Opts).

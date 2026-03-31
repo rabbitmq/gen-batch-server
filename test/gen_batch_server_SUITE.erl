@@ -49,7 +49,8 @@ all_tests() ->
      handle_continue_chained,
      opts_not_at_front,
      flush_mailbox_on_terminate_disabled,
-     flush_mailbox_on_terminate_enabled
+     flush_mailbox_on_terminate_enabled,
+     aimd_batch_size_growth
     ].
 
 groups() ->
@@ -600,6 +601,34 @@ opts_not_at_front(Config) ->
     %% collect all batch sizes
     Sizes = collect_batch_sizes([]),
     ?assert(lists:all(fun(S) -> S =< 64 end, Sizes)),
+    ?assert(meck:validate(Mod)),
+    ok.
+
+aimd_batch_size_growth(Config) ->
+    Mod = ?config(mod, Config),
+    Self = self(),
+    meck:new(Mod, [non_strict]),
+    meck:expect(Mod, init, fun(_) -> {ok, #{}} end),
+    meck:expect(Mod, handle_batch,
+                fun(Ops, State) ->
+                        Self ! {batch_size, length(Ops)},
+                        {ok, State}
+                end),
+    %% With AIMD(step=32), growth from min=32 to max=256 takes 7 full batches;
+    %% exponential doubling covers the same range in only 3. Verify additive
+    %% growth is used by counting distinct sub-max batch sizes observed.
+    Opts = [{min_batch_size, 32},
+            {max_batch_size, 256},
+            {batch_size_growth, {aimd, 32}}],
+    {ok, Pid} = gen_batch_server:start_link(undefined, Mod, [], Opts),
+    [gen_batch_server:cast(Pid, I) || I <- lists:seq(1, 2000)],
+    timer:sleep(200),
+    Sizes = collect_batch_sizes([]),
+    ?assert(lists:all(fun(S) -> S =< 256 end, Sizes)),
+    %% AIMD yields 7 distinct sub-max steps (32,64,96,128,160,192,224);
+    %% exponential yields only 3 (32,64,128). Require at least 5.
+    SubMaxSizes = lists:usort([S || S <- Sizes, S < 256]),
+    ?assert(length(SubMaxSizes) >= 5),
     ?assert(meck:validate(Mod)),
     ok.
 
