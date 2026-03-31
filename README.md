@@ -38,8 +38,10 @@ some resource (such as a `dets` table) that doesn't handle casts.
         Opt = {debug, Dbgs} |
               {min_batch_size | max_batch_size, non_neg_integer()} |
               {reversed_batch, boolean()} |
-              {flush_mailbox_on_terminate, false | {true, SummaryCount}}
+              {flush_mailbox_on_terminate, false | {true, SummaryCount}} |
+              {batch_size_growth, exponential | {aimd, Step}}
         SummaryCount = non_neg_integer()
+        Step = pos_integer()
         Opts = [Opt]
         Opts = [term()]
         Result = {ok,Pid} | ignore | {error,Error}
@@ -63,6 +65,14 @@ mailbox is then fully drained. This happens *before* `Module:terminate/2` is cal
 so the callback can inspect or forward the summary. Draining the mailbox prevents
 `proc_lib` crash reports from pretty-printing potentially large messages (e.g. binary
 payloads), which can cause unbounded memory growth.
+
+The `batch_size_growth` option controls how the batch size grows when the server
+is under load. The default, `exponential`, doubles the batch size each time a full
+batch is completed (the original behaviour). Setting it to `{aimd, Step}` switches
+to Additive Increase / Multiplicative Decrease: the batch size grows by `Step` on
+each full batch and halves whenever the mailbox is found empty. AIMD produces a
+smoother, more gradual ramp-up and is useful when large sudden jumps in batch size
+are undesirable.
 
 
 #### cast(ServerRef, Request) -> ok
