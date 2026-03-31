@@ -37,7 +37,9 @@ some resource (such as a `dets` table) that doesn't handle casts.
         Args = term()
         Opt = {debug, Dbgs} |
               {min_batch_size | max_batch_size, non_neg_integer()} |
-              {reversed_batch, boolean()}
+              {reversed_batch, boolean()} |
+              {flush_mailbox_on_terminate, false | {true, SummaryCount}}
+        SummaryCount = non_neg_integer()
         Opts = [Opt]
         Opts = [term()]
         Result = {ok,Pid} | ignore | {error,Error}
@@ -51,6 +53,16 @@ The `reversed_batch` option is an advanced option that where the batch that is
 passed to `handle_batch/2` is in reversed order to the one the messages were
 received in. This avoids a `list:reverse/1` all before the batch handling and is
 somewhat more performant.
+
+The `flush_mailbox_on_terminate` option controls whether pending mailbox messages
+are drained when the server terminates. By default it is `false` (disabled). When
+set to `{true, SummaryCount}`, up to `SummaryCount` of the pending messages are
+captured along with the total mailbox count and written to the process dictionary
+under the key `mailbox_summary` (as `#{total => Count, messages => [...]}`). The
+mailbox is then fully drained. This happens *before* `Module:terminate/2` is called,
+so the callback can inspect or forward the summary. Draining the mailbox prevents
+`proc_lib` crash reports from pretty-printing potentially large messages (e.g. binary
+payloads), which can cause unbounded memory growth.
 
 
 #### cast(ServerRef, Request) -> ok

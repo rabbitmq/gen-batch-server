@@ -46,7 +46,8 @@
                  name :: atom(),
                  module :: module(),
                  hibernate_after = infinity :: non_neg_integer() | infinity,
-                 reversed_batch = false :: boolean()}).
+                 reversed_batch = false :: boolean(),
+                 flush_mailbox_on_terminate = false :: false | {true, non_neg_integer()}}).
 
 -record(state, {batch = [] :: [op()],
                 batch_count = 0 :: non_neg_integer(),
@@ -146,6 +147,7 @@ init_it(Starter, Parent, Name0, Mod, {GBOpts, Args}, Options) ->
     MinBatchSize = proplists:get_value(min_batch_size, GBOpts,
                                        ?MIN_MAX_BATCH_SIZE),
     ReverseBatch = proplists:get_value(reversed_batch, GBOpts, false),
+    FlushMailbox = proplists:get_value(flush_mailbox_on_terminate, GBOpts, false),
     Conf = #config{module = Mod,
                    parent = Parent,
                    name = Name,
@@ -153,7 +155,8 @@ init_it(Starter, Parent, Name0, Mod, {GBOpts, Args}, Options) ->
                    min_batch_size = MinBatchSize,
                    max_batch_size = MaxBatchSize,
                    hibernate_after = HibernateAfter,
-                   reversed_batch = ReverseBatch},
+                   reversed_batch = ReverseBatch,
+                   flush_mailbox_on_terminate = FlushMailbox},
     case init_it(Mod, Args) of
         {ok, {ok, Inner0}} ->
             proc_lib:init_ack(Starter, {ok, self()}),
@@ -288,8 +291,8 @@ loop_wait(#state{config = #config{hibernate_after = Hib}} = State00, Parent) ->
                     sys:handle_system_msg(Request, From, Parent,
                                           ?MODULE, State0#state.debug, State0);
                 {'EXIT', Parent, Reason} ->
+                    flush_mailbox(State0#state.config),
                     terminate(Reason, State0),
-                    flush_mailbox(),
                     exit(Reason);
                 _ ->
                     enter_loop_batched(Msg, Parent, State0)
@@ -343,8 +346,8 @@ loop_batched(#state{debug = Debug} = State0, Parent) ->
                     sys:handle_system_msg(Request, From, Parent,
                                           ?MODULE, Debug, State0);
                 {'EXIT', Parent, Reason} ->
+                    flush_mailbox(State0#state.config),
                     terminate(Reason, State0),
-                    flush_mailbox(),
                     exit(Reason);
                 _ ->
                     enter_loop_batched(Msg, Parent, State0)
@@ -387,8 +390,8 @@ complete_batch(#state{batch = Batch0,
         throw:Result ->
             handle_batch_result(Result, State0, Debug0);
         Class:Reason:Stacktrace ->
+            flush_mailbox(State0#state.config),
             terminate(Reason, State0),
-            flush_mailbox(),
             erlang:raise(Class, Reason, safe_stacktrace(Stacktrace))
     end.
 
@@ -417,8 +420,8 @@ handle_batch_result({ok, Actions, Inner, {continue, Continue}}, State0, Debug0) 
                                  needs_gc = ShouldGc,
                                  debug = Debug});
 handle_batch_result({stop, Reason}, State0, _Debug0) ->
+    flush_mailbox(State0#state.config),
     terminate(Reason, State0),
-    flush_mailbox(),
     exit(Reason).
 
 handle_actions(Actions, Debug0) ->
@@ -440,8 +443,8 @@ handle_continue(Continue, #state{config = #config{module = Mod},
         throw:Result ->
             handle_continue_result(Result, State0);
         Class:Reason:Stacktrace ->
+            flush_mailbox(State0#state.config),
             terminate(Reason, State0),
-            flush_mailbox(),
             erlang:raise(Class, Reason, safe_stacktrace(Stacktrace))
     end.
 
@@ -450,8 +453,8 @@ handle_continue_result({ok, Inner}, State0) ->
 handle_continue_result({ok, Inner, {continue, NextContinue}}, State0) ->
     handle_continue(NextContinue, State0#state{state = Inner});
 handle_continue_result({stop, Reason}, State0) ->
+    flush_mailbox(State0#state.config),
     terminate(Reason, State0),
-    flush_mailbox(),
     exit(Reason).
 
 handle_debug_in(#state{debug = Dbg0} = State, Msg) ->
@@ -472,8 +475,8 @@ system_continue(Parent, Debug, State) ->
 
 -spec system_terminate(term(), pid(), list(), term()) -> no_return().
 system_terminate(Reason, _Parent, _Debug, State) ->
+    flush_mailbox(State#state.config),
     terminate(Reason, State),
-    flush_mailbox(),
     exit(Reason).
 
 system_get_state(State) ->
@@ -519,7 +522,8 @@ gen_start(undefined, Mod, Args, Opts0) ->
     {GBOpts, Opts} = lists:partition(fun ({Key, _}) ->
                                              Key == max_batch_size orelse
                                              Key == min_batch_size orelse
-                                             Key == reversed_batch;
+                                             Key == reversed_batch orelse
+                                             Key == flush_mailbox_on_terminate;
                                          (_) -> false
                                      end, Opts0),
     gen:start(?MODULE, link, Mod, {GBOpts, Args}, Opts);
@@ -529,7 +533,8 @@ gen_start(Name, Mod, Args, Opts0) ->
     {GBOpts, Opts} = lists:partition(fun ({Key, _}) ->
                                              Key == max_batch_size orelse
                                              Key == min_batch_size orelse
-                                             Key == reversed_batch;
+                                             Key == reversed_batch orelse
+                                             Key == flush_mailbox_on_terminate;
                                          (_) -> false
                                      end, Opts0),
     gen:start(?MODULE, link, Name, Mod, {GBOpts, Args}, Opts).
@@ -544,10 +549,34 @@ safe_stacktrace(Stacktrace) ->
                       Frame
               end, Stacktrace).
 
-%% Flush all messages from the mailbox. This prevents proc_lib crash reports
-%% from pretty-printing potentially large messages (e.g. WAL write commands
-%% containing binary payloads), which can cause unbounded memory growth.
-flush_mailbox() ->
-    receive _ -> flush_mailbox()
-    after 0 -> ok
+%% When disabled (default) do nothing. When enabled, collect a sample of up to
+%% N messages and the total mailbox count, write them to the process dictionary
+%% under the key 'mailbox_summary', then drain the remaining messages.
+%% This prevents proc_lib crash reports from pretty-printing potentially large
+%% messages (e.g. WAL write commands containing binary payloads), which can
+%% cause unbounded memory growth. The summary is written before terminate/2 is
+%% called so that the callback can inspect or forward it.
+flush_mailbox(#config{flush_mailbox_on_terminate = false}) ->
+    ok;
+flush_mailbox(#config{flush_mailbox_on_terminate = {true, N}}) ->
+    {Total, Sample} = drain_mailbox_sample(N, 0, []),
+    erlang:put(mailbox_summary, #{total => Total, messages => Sample}),
+    ok.
+
+drain_mailbox_sample(0, Count, Acc) ->
+    {Count + drain_mailbox_count(0), lists:reverse(Acc)};
+drain_mailbox_sample(N, Count, Acc) ->
+    receive
+        Msg ->
+            drain_mailbox_sample(N - 1, Count + 1, [Msg | Acc])
+    after 0 ->
+        {Count, lists:reverse(Acc)}
+    end.
+
+drain_mailbox_count(Count) ->
+    receive
+        _ ->
+            drain_mailbox_count(Count + 1)
+    after 0 ->
+        Count
     end.
