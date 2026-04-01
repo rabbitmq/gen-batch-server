@@ -15,6 +15,18 @@
          cast_batch/2,
          call/2,
          call/3,
+         send_request/2,
+         send_request/4,
+         wait_response/2,
+         wait_response/3,
+         receive_response/2,
+         receive_response/3,
+         check_response/2,
+         check_response/3,
+         reqids_new/0,
+         reqids_add/3,
+         reqids_size/1,
+         reqids_to_list/1,
          system_continue/3,
          system_terminate/4,
          system_get_state/1,
@@ -33,7 +45,16 @@
                       {'global', term()} |
                       {'via', Module :: module(), Name :: term()}.
 
--type from() :: {Pid :: pid(), Tag :: reference()}.
+-type reply_tag() :: reference()
+                   | nonempty_improper_list('alias', reference()).
+
+-type from() :: {Pid :: pid(), Tag :: reply_tag()}.
+
+-opaque request_id() :: gen:request_id().
+
+-opaque request_id_collection() :: gen:request_id_collection().
+
+-type response_timeout() :: timeout() | {abs, integer()}.
 
 -type op() :: {cast, UserOp :: term()} |
               {call, from(), UserOp :: term()} |
@@ -57,8 +78,9 @@
                 needs_gc = false :: boolean(),
                 debug :: list()}).
 
--export_type([from/0, op/0,
-              action/0, server_ref/0]).
+-export_type([from/0, reply_tag/0, op/0,
+              action/0, server_ref/0,
+              request_id/0, request_id_collection/0]).
 
 %%% Behaviour
 
@@ -273,6 +295,111 @@ call(Name, Request, Timeout) ->
             exit({Reason, {?MODULE, call, [Name, Request, Timeout]}})
     end.
 
+-spec send_request(ServerRef, Request) -> ReqId when
+      ServerRef :: server_ref(),
+      Request :: term(),
+      ReqId :: request_id().
+send_request(ServerRef, Request) ->
+    gen:send_request(ServerRef, '$gen_call', Request).
+
+-spec send_request(ServerRef, Request, Label, ReqIdCollection) ->
+    NewReqIdCollection when
+      ServerRef :: server_ref(),
+      Request :: term(),
+      Label :: term(),
+      ReqIdCollection :: request_id_collection(),
+      NewReqIdCollection :: request_id_collection().
+send_request(ServerRef, Request, Label, ReqIdCollection) ->
+    gen:send_request(ServerRef, '$gen_call', Request, Label, ReqIdCollection).
+
+-spec wait_response(ReqId, WaitTime) -> Result when
+      ReqId :: request_id(),
+      WaitTime :: response_timeout(),
+      Response :: {reply, Reply :: term()}
+                | {error, {Reason :: term(), server_ref()}},
+      Result :: Response | 'timeout'.
+wait_response(ReqId, WaitTime) ->
+    gen:wait_response(ReqId, WaitTime).
+
+-spec wait_response(ReqIdCollection, WaitTime, Delete) -> Result when
+      ReqIdCollection :: request_id_collection(),
+      WaitTime :: response_timeout(),
+      Delete :: boolean(),
+      Response :: {reply, Reply :: term()}
+                | {error, {Reason :: term(), server_ref()}},
+      Result :: {Response, Label :: term(),
+                 NewReqIdCollection :: request_id_collection()}
+              | 'no_request' | 'timeout'.
+wait_response(ReqIdCollection, WaitTime, Delete) ->
+    gen:wait_response(ReqIdCollection, WaitTime, Delete).
+
+-spec receive_response(ReqId, Timeout) -> Result when
+      ReqId :: request_id(),
+      Timeout :: response_timeout(),
+      Response :: {reply, Reply :: term()}
+                | {error, {Reason :: term(), server_ref()}},
+      Result :: Response | 'timeout'.
+receive_response(ReqId, Timeout) ->
+    gen:receive_response(ReqId, Timeout).
+
+-spec receive_response(ReqIdCollection, Timeout, Delete) -> Result when
+      ReqIdCollection :: request_id_collection(),
+      Timeout :: response_timeout(),
+      Delete :: boolean(),
+      Response :: {reply, Reply :: term()}
+                | {error, {Reason :: term(), server_ref()}},
+      Result :: {Response, Label :: term(),
+                 NewReqIdCollection :: request_id_collection()}
+              | 'no_request' | 'timeout'.
+receive_response(ReqIdCollection, Timeout, Delete) ->
+    gen:receive_response(ReqIdCollection, Timeout, Delete).
+
+-spec check_response(Msg, ReqId) -> Result when
+      Msg :: term(),
+      ReqId :: request_id(),
+      Response :: {reply, Reply :: term()}
+                | {error, {Reason :: term(), server_ref()}},
+      Result :: Response | 'no_reply'.
+check_response(Msg, ReqId) ->
+    gen:check_response(Msg, ReqId).
+
+-spec check_response(Msg, ReqIdCollection, Delete) -> Result when
+      Msg :: term(),
+      ReqIdCollection :: request_id_collection(),
+      Delete :: boolean(),
+      Response :: {reply, Reply :: term()}
+                | {error, {Reason :: term(), server_ref()}},
+      Result :: {Response, Label :: term(),
+                 NewReqIdCollection :: request_id_collection()}
+              | 'no_request' | 'no_reply'.
+check_response(Msg, ReqIdCollection, Delete) ->
+    gen:check_response(Msg, ReqIdCollection, Delete).
+
+-spec reqids_new() -> NewReqIdCollection when
+      NewReqIdCollection :: request_id_collection().
+reqids_new() ->
+    gen:reqids_new().
+
+-spec reqids_add(ReqId, Label, ReqIdCollection) ->
+    NewReqIdCollection when
+      ReqId :: request_id(),
+      Label :: term(),
+      ReqIdCollection :: request_id_collection(),
+      NewReqIdCollection :: request_id_collection().
+reqids_add(ReqId, Label, ReqIdCollection) ->
+    gen:reqids_add(ReqId, Label, ReqIdCollection).
+
+-spec reqids_size(ReqIdCollection) -> non_neg_integer() when
+      ReqIdCollection :: request_id_collection().
+reqids_size(ReqIdCollection) ->
+    gen:reqids_size(ReqIdCollection).
+
+-spec reqids_to_list(ReqIdCollection) -> [{ReqId, Label}] when
+      ReqIdCollection :: request_id_collection(),
+      ReqId :: request_id(),
+      Label :: term().
+reqids_to_list(ReqIdCollection) ->
+    gen:reqids_to_list(ReqIdCollection).
 
 %% Internal
 
@@ -433,9 +560,10 @@ handle_batch_result({stop, Reason}, State0, _Debug0) ->
     exit(Reason).
 
 handle_actions(Actions, Debug0) ->
-    lists:foldl(fun ({reply, {Pid, Tag}, Msg},
+    lists:foldl(fun ({reply, From, Msg},
                      {ShouldGc, Dbg}) ->
-                        Pid ! {Tag, Msg},
+                        gen:reply(From, Msg),
+                        {Pid, _Tag} = From,
                         {ShouldGc,
                          handle_debug_out(Pid, Msg, Dbg)};
                     (garbage_collect, {_, Dbg}) ->
