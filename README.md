@@ -117,7 +117,8 @@ The timeout is optional and defaults to 5000ms.
 Sends an asynchronous call request to the `gen_batch_server`. Returns a request
 identifier `ReqId` that can be used with `wait_response/2`, `receive_response/2`,
 or `check_response/2` to collect the reply later. The request appears as a
-`{call, From, Request}` operation in `Module:handle_batch/2`.
+`{call, From, Request}` operation in `Module:handle_batch/2`, where `From` is the
+same opaque alias-based tag as described by `reply_tag()` / `from()` in the public API.
 
 #### send_request(ServerRef, Request, Label, ReqIdCollection) -> NewReqIdCollection
 
