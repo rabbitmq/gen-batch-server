@@ -10,14 +10,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        otp: ['26', '27', '28']
+        otp: ['27', '28', '29']
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: erlef/setup-beam@v1
         with:
           otp-version: ${{ matrix.otp }}
-          rebar3-version: '3.24'
-      - uses: actions/cache@v4
+          rebar3-version: '3.27'
+      - uses: actions/cache@v6
         with:
           path: |
             _build
