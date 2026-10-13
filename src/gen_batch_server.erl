@@ -56,11 +56,13 @@
 
 -type response_timeout() :: timeout() | {abs, integer()}.
 
+-type batch() :: [op()] | {batch, term()}.
+
 -type op() :: {cast, UserOp :: term()} |
               {call, from(), UserOp :: term()} |
               {info, UserOp :: term()}.
 
--record(config, {batch_size :: non_neg_integer(),
+-record(config, {
                  min_batch_size :: non_neg_integer(),
                  max_batch_size :: non_neg_integer(),
                  parent :: pid(),
@@ -69,16 +71,19 @@
                  hibernate_after = infinity :: non_neg_integer() | infinity,
                  reversed_batch = false :: boolean(),
                  flush_mailbox_on_terminate = false :: false | {true, non_neg_integer()},
-                 batch_size_growth = exponential :: exponential | {aimd, pos_integer()}}).
+                 batch_size_growth = exponential :: exponential | {aimd, pos_integer()},
+                 append_batch = undefined :: undefined | fun((op(), term()) -> term() | {finish_batch, term()})}).
 
--record(state, {batch = [] :: [op()],
+-record(state, {batch = [] :: batch(),
                 batch_count = 0 :: non_neg_integer(),
+                batch_size :: non_neg_integer(),
                 config = #config{} :: #config{},
                 state :: term(),
                 needs_gc = false :: boolean(),
-                debug :: list()}).
+                debug :: list(),
+                leftover_ops = [] :: [op()]}).
 
--export_type([from/0, reply_tag/0, op/0,
+-export_type([from/0, reply_tag/0, op/0, batch/0,
               action/0, server_ref/0,
               request_id/0, request_id_collection/0]).
 
@@ -97,7 +102,7 @@
     {error, Reason :: term()}
       when State :: term().
 
--callback handle_batch([op()], State) ->
+-callback handle_batch(batch(), State) ->
     {ok, State} |
     {ok, State, {continue, term()}} |
     {ok, [action()], State} |
@@ -115,11 +120,15 @@
 
 -callback format_status(State :: term()) -> term().
 
+-callback append_batch(op(), OpaqueBatch :: term() | init_batch) ->
+    OpaqueBatch :: term() | {finish_batch, OpaqueBatch :: term()}.
+
 %% TODO: code_change
 
 -optional_callbacks([handle_continue/2,
                      format_status/1,
-                     terminate/2]).
+                     terminate/2,
+                     append_batch/2]).
 
 
 %%%
@@ -171,26 +180,41 @@ init_it(Starter, Parent, Name0, Mod, {GBOpts, Args}, Options) ->
     FlushMailbox = proplists:get_value(flush_mailbox_on_terminate, GBOpts, false),
     BatchSizeGrowth = proplists:get_value(batch_size_growth, GBOpts,
                                           exponential),
+    %% call module_info/0 here to ensure that the module is loaded as else
+    %% it may return false when calling erlang:function_exported/3 even
+    %% if the callback is implemented.
+    _ = Mod:module_info(),
+    AppendBatch = case erlang:function_exported(Mod, append_batch, 2) of
+                      true ->
+                          fun Mod:append_batch/2;
+                      false ->
+                          undefined
+                  end,
+    BatchInit = init_batch(AppendBatch),
     Conf = #config{module = Mod,
                    parent = Parent,
                    name = Name,
-                   batch_size = MinBatchSize,
                    min_batch_size = MinBatchSize,
                    max_batch_size = MaxBatchSize,
                    hibernate_after = HibernateAfter,
                    reversed_batch = ReverseBatch,
                    flush_mailbox_on_terminate = FlushMailbox,
-                   batch_size_growth = BatchSizeGrowth},
+                   batch_size_growth = BatchSizeGrowth,
+                   append_batch = AppendBatch},
     case init_it(Mod, Args) of
         {ok, {ok, Inner0}} ->
             proc_lib:init_ack(Starter, {ok, self()}),
             State = #state{config = Conf,
+                           batch = BatchInit,
+                           batch_size = MinBatchSize,
                            state = Inner0,
                            debug = Debug},
             loop_wait(State, Parent);
         {ok, {ok, Inner0, {continue, Continue}}} ->
             proc_lib:init_ack(Starter, {ok, self()}),
             State0 = #state{config = Conf,
+                            batch = BatchInit,
+                            batch_size = MinBatchSize,
                             state = Inner0,
                             debug = Debug},
             State = handle_continue(Continue, State0),
@@ -432,54 +456,142 @@ loop_wait(#state{config = #config{hibernate_after = Hib}} = State00, Parent) ->
 
 append_msg({'$gen_cast', Msg},
            #state{batch = Batch,
-                  batch_count = BatchCount} = State0) ->
+                  batch_count = BatchCount,
+                  config = #config{append_batch = undefined}} = State0) ->
     State0#state{batch = [{cast, Msg} | Batch],
                  batch_count = BatchCount + 1};
+append_msg({'$gen_cast', Msg},
+           #state{batch = Batch,
+                  batch_count = BatchCount,
+                  config = #config{append_batch = Fun}} = State0) ->
+    append_op(Fun, {cast, Msg}, Batch, BatchCount, State0);
 append_msg({'$gen_cast_batch', Msgs, Count},
            #state{batch = Batch,
-                  batch_count = BatchCount} = State0) ->
+                  batch_count = BatchCount,
+                  config = #config{append_batch = undefined}} = State0) ->
     State0#state{batch = Msgs ++ Batch,
                  batch_count = BatchCount + Count};
+append_msg({'$gen_cast_batch', Msgs, _Count},
+           #state{batch = Batch,
+                  batch_count = BatchCount,
+                  config = #config{append_batch = Fun}} = State0) ->
+    case fold_append(lists:reverse(Msgs), Fun, Batch, BatchCount, State0) of
+        {finish, Rest, State} ->
+            {finish, State#state{leftover_ops = Rest}};
+        #state{} = State ->
+            State
+    end;
 append_msg({'$gen_call', From, Msg},
            #state{batch = Batch,
-                  batch_count = BatchCount} = State0) ->
+                  batch_count = BatchCount,
+                  config = #config{append_batch = undefined}} = State0) ->
     State0#state{batch = [{call, From, Msg} | Batch],
                  batch_count = BatchCount + 1};
+append_msg({'$gen_call', From, Msg},
+           #state{batch = Batch,
+                  batch_count = BatchCount,
+                  config = #config{append_batch = Fun}} = State0) ->
+    append_op(Fun, {call, From, Msg}, Batch, BatchCount, State0);
 append_msg(Msg, #state{batch = Batch,
-                       batch_count = BatchCount} = State0) ->
+                       batch_count = BatchCount,
+                       config = #config{append_batch = undefined}} = State0) ->
     State0#state{batch = [{info, Msg} | Batch],
-                 batch_count = BatchCount + 1}.
+                 batch_count = BatchCount + 1};
+append_msg(Msg, #state{batch = Batch,
+                       batch_count = BatchCount,
+                       config = #config{append_batch = Fun}} = State0) ->
+    append_op(Fun, {info, Msg}, Batch, BatchCount, State0).
+
+append_op(Fun, Op, {batch, Batch}, BatchCount, State0) ->
+    case Fun(Op, Batch) of
+        {finish_batch, NewBatch} ->
+            {finish, State0#state{batch = {batch, NewBatch},
+                                  batch_count = BatchCount + 1}};
+        NewBatch ->
+            State0#state{batch = {batch, NewBatch},
+                         batch_count = BatchCount + 1}
+    end.
+
+fold_append([], _Fun, Batch, Count, State0) ->
+    State0#state{batch = Batch, batch_count = Count};
+fold_append([Op | Rest], Fun, {batch, Batch}, Count, State0) ->
+    case Fun(Op, Batch) of
+        {finish_batch, NewBatch} ->
+            {finish, Rest, State0#state{batch = {batch, NewBatch},
+                                        batch_count = Count + 1}};
+        NewBatch ->
+            fold_append(Rest, Fun, {batch, NewBatch}, Count + 1, State0)
+    end.
 
 enter_loop_batched(Msg, Parent, #state{debug = []} = State0) ->
-    loop_batched(append_msg(Msg, State0), Parent);
+    case append_msg(Msg, State0) of
+        {finish, State} ->
+            loop_batched_finish(State, Parent);
+        #state{} = State ->
+            loop_batched(State, Parent)
+    end;
 enter_loop_batched(Msg, Parent, State0) ->
-    State = handle_debug_in(State0, Msg),
-    %% append to batch
-    loop_batched(append_msg(Msg, State), Parent).
+    State1 = handle_debug_in(State0, Msg),
+    case append_msg(Msg, State1) of
+        {finish, State} ->
+            loop_batched_finish(State, Parent);
+        #state{} = State ->
+            loop_batched(State, Parent)
+    end.
 
-loop_batched(#state{config = #config{batch_size = BatchSize,
-                                     max_batch_size = Max,
-                                     batch_size_growth = Growth} = Config,
+next_batch_size(BatchSize, #config{max_batch_size = Max,
+                                   batch_size_growth = Growth}) ->
+    case Growth of
+        exponential ->
+            min(Max, BatchSize * 2);
+        {aimd, Step} ->
+            min(Max, BatchSize + Step)
+    end.
+
+loop_batched_finish(#state{config = Config,
+                           batch_size = BatchSize,
+                           leftover_ops = LeftoverOps} = State0,
+                    Parent) ->
+    State = complete_batch(State0),
+    NewBatchSize = next_batch_size(BatchSize, Config),
+    State1 = State#state{batch_size = NewBatchSize, leftover_ops = []},
+    process_leftover_ops(LeftoverOps, Parent, State1).
+
+process_leftover_ops([], Parent, State) ->
+    loop_batched(State, Parent);
+process_leftover_ops(LeftoverOps, Parent, State0) ->
+    %% LeftoverOps are already in the correct `{cast, Msg}` format.
+    %% We just need to wrap them in a `$gen_cast_batch` message.
+    %% Note: They are in chronological order, but `$gen_cast_batch` expects
+    %% them to be reversed (as cast_batch_msg/1 does).
+    ReversedOps = lists:reverse(LeftoverOps),
+    Msg = {'$gen_cast_batch', ReversedOps, length(ReversedOps)},
+    case append_msg(Msg, State0) of
+        {finish, State} ->
+            State1 = complete_batch(State),
+            NewBatchSize = next_batch_size(State1#state.batch_size, State1#state.config),
+            State2 = State1#state{batch_size = NewBatchSize},
+            NewLeftoverOps = State2#state.leftover_ops,
+            process_leftover_ops(NewLeftoverOps, Parent, State2#state{leftover_ops = []});
+        #state{} = State ->
+            loop_batched(State, Parent)
+    end.
+
+loop_batched(#state{config = Config,
+                    batch_size = BatchSize,
                     batch_count = BatchCount} = State0,
              Parent) when BatchCount >= BatchSize ->
     % complete batch after seeing batch_size writes
     State = complete_batch(State0),
-    % grow batch size according to the configured strategy
-    NewBatchSize = case Growth of
-                       exponential ->
-                           min(Max, BatchSize * 2);
-                       {aimd, Step} ->
-                           min(Max, BatchSize + Step)
-                   end,
-    loop_wait(State#state{config = Config#config{batch_size = NewBatchSize}},
-              Parent);
-loop_batched(#state{debug = Debug} = State0, Parent) ->
+    NewBatchSize = next_batch_size(BatchSize, Config),
+    loop_wait(State#state{batch_size = NewBatchSize}, Parent);
+loop_batched(State0, Parent) ->
     receive
         Msg ->
             case Msg of
                 {system, From, Request} ->
                     sys:handle_system_msg(Request, From, Parent,
-                                          ?MODULE, Debug, State0);
+                                          ?MODULE, State0#state.debug, State0);
                 {'EXIT', Parent, Reason} ->
                     flush_mailbox(State0#state.config),
                     terminate(Reason, State0),
@@ -491,70 +603,76 @@ loop_batched(#state{debug = Debug} = State0, Parent) ->
               State = complete_batch(State0),
               Config = State#state.config,
               NewBatchSize = max(Config#config.min_batch_size,
-                                 Config#config.batch_size div 2),
-              loop_wait(State#state{config =
-                                    Config#config{batch_size = NewBatchSize}},
-                        Parent)
+                                 State#state.batch_size div 2),
+              loop_wait(State#state{batch_size = NewBatchSize}, Parent)
     end.
 
 terminate(Reason, #state{config = #config{module = Mod}, state = Inner}) ->
     catch Mod:terminate(Reason, Inner),
     ok.
 
+init_batch(undefined) ->
+    [];
+init_batch(_) ->
+    {batch, init_batch}.
 
-complete_batch(#state{batch = []} = State) ->
+complete_batch(#state{batch_count = 0} = State) ->
     State;
 complete_batch(#state{batch = Batch0,
                       config = #config{module = Mod,
-                                       reversed_batch = ReverseBatch},
+                                       reversed_batch = ReverseBatch,
+                                       append_batch = AppendBatch},
                       state = Inner0,
                       debug = Debug0} = State0) ->
-    Batch = case ReverseBatch of
-                false ->
-                    %% reversing restores the received order
+    Batch = case {AppendBatch, ReverseBatch} of
+                {undefined, false} ->
                     lists:reverse(Batch0);
-                true ->
-                    %% accepting the batch in reverse order means we can avoid
-                    %% reversing the list
-                    Batch0
+                {undefined, true} ->
+                    Batch0;
+                _ ->
+                    {batch, Opaque} = Batch0,
+                    Opaque
             end,
 
+    BatchReset = init_batch(AppendBatch),
+
     try Mod:handle_batch(Batch, Inner0) of
-        Result -> handle_batch_result(Result, State0, Debug0)
+        Result ->
+            handle_batch_result(Result, State0, Debug0, BatchReset)
     catch
         throw:Result ->
-            handle_batch_result(Result, State0, Debug0);
+            handle_batch_result(Result, State0, Debug0, BatchReset);
         Class:Reason:Stacktrace ->
             flush_mailbox(State0#state.config),
             terminate(Reason, State0),
             erlang:raise(Class, Reason, safe_stacktrace(Stacktrace))
     end.
 
-handle_batch_result({ok, Inner}, State0, _Debug0) ->
-    State0#state{batch = [],
+handle_batch_result({ok, Inner}, State0, _Debug0, BatchReset) ->
+    State0#state{batch = BatchReset,
                  state = Inner,
                  batch_count = 0};
-handle_batch_result({ok, Inner, {continue, Continue}}, State0, _Debug0) ->
+handle_batch_result({ok, Inner, {continue, Continue}}, State0, _Debug0, BatchReset) ->
     handle_continue(Continue,
-                    State0#state{batch = [],
+                    State0#state{batch = BatchReset,
                                  state = Inner,
                                  batch_count = 0});
-handle_batch_result({ok, Actions, Inner}, State0, Debug0) when is_list(Actions) ->
+handle_batch_result({ok, Actions, Inner}, State0, Debug0, BatchReset) when is_list(Actions) ->
     {ShouldGc, Debug} = handle_actions(Actions, Debug0),
-    State0#state{batch = [],
+    State0#state{batch = BatchReset,
                  batch_count = 0,
                  state = Inner,
                  needs_gc = ShouldGc,
                  debug = Debug};
-handle_batch_result({ok, Actions, Inner, {continue, Continue}}, State0, Debug0) when is_list(Actions) ->
+handle_batch_result({ok, Actions, Inner, {continue, Continue}}, State0, Debug0, BatchReset) when is_list(Actions) ->
     {ShouldGc, Debug} = handle_actions(Actions, Debug0),
     handle_continue(Continue,
-                    State0#state{batch = [],
+                    State0#state{batch = BatchReset,
                                  batch_count = 0,
                                  state = Inner,
                                  needs_gc = ShouldGc,
                                  debug = Debug});
-handle_batch_result({stop, Reason}, State0, _Debug0) ->
+handle_batch_result({stop, Reason}, State0, _Debug0, _BatchReset) ->
     flush_mailbox(State0#state.config),
     terminate(Reason, State0),
     exit(Reason).
@@ -574,7 +692,8 @@ handle_actions(Actions, Debug0) ->
 handle_continue(Continue, #state{config = #config{module = Mod},
                                  state = Inner0} = State0) ->
     try Mod:handle_continue(Continue, Inner0) of
-        Result -> handle_continue_result(Result, State0)
+        Result ->
+            handle_continue_result(Result, State0)
     catch
         throw:Result ->
             handle_continue_result(Result, State0);

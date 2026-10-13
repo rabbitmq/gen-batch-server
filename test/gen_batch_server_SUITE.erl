@@ -54,7 +54,12 @@ all_tests() ->
      send_request_receive_response,
      send_request_wait_response,
      send_request_check_response,
-     send_request_collection
+     send_request_collection,
+     append_batch_basic,
+     append_batch_finish,
+     append_batch_reversed_batch_ignored,
+     append_batch_cast_batch,
+     append_batch_cast_batch_with_leftover
     ].
 
 groups() ->
@@ -797,6 +802,136 @@ send_request_collection(Config) ->
     ?assert(meck:validate(Mod)),
     ok.
 
+append_batch_basic(Config) ->
+    Mod = ?config(mod, Config),
+    Self = self(),
+    meck:new(Mod, [non_strict]),
+    meck:expect(Mod, init, fun(_) -> {ok, #{}} end),
+    meck:expect(Mod, append_batch,
+                fun({cast, Val}, init_batch) ->
+                        [Val];
+                   ({cast, Val}, Acc) ->
+                        [Val | Acc];
+                   ({info, Val}, init_batch) ->
+                        [Val];
+                   ({info, Val}, Acc) ->
+                        [Val | Acc];
+                   ({call, _From, Val}, init_batch) ->
+                        [Val];
+                   ({call, _From, Val}, Acc) ->
+                        [Val | Acc]
+                end),
+    meck:expect(Mod, handle_batch,
+                fun(Batch, State) ->
+                        Self ! {batch, Batch},
+                        {ok, State}
+                end),
+    {ok, Pid} = gen_batch_server:start_link(Mod, []),
+    ok = gen_batch_server:cast(Pid, hello),
+    receive
+        {batch, Batch} ->
+            ?assertEqual([hello], Batch)
+    after 2000 -> exit(timeout)
+    end,
+    ?assert(meck:validate(Mod)),
+    ok.
+
+append_batch_finish(Config) ->
+    Mod = ?config(mod, Config),
+    Self = self(),
+    meck:new(Mod, [non_strict]),
+    meck:expect(Mod, init, fun(_) -> {ok, 0} end),
+    meck:expect(Mod, append_batch,
+                fun({cast, Val}, init_batch) ->
+                        {finish_batch, [Val]};
+                   ({cast, Val}, Acc) ->
+                        {finish_batch, [Val | Acc]}
+                end),
+    meck:expect(Mod, handle_batch,
+                fun(Batch, Count) ->
+                        Self ! {batch, Batch},
+                        {ok, Count + 1}
+                end),
+    Opts = [{max_batch_size, 8192}],
+    {ok, Pid} = gen_batch_server:start_link(undefined, Mod, [], Opts),
+    ok = gen_batch_server:cast(Pid, a),
+    ok = gen_batch_server:cast(Pid, b),
+    ok = gen_batch_server:cast(Pid, c),
+    Batches = collect_batches(3, []),
+    ?assert(lists:all(fun(B) -> length(B) =:= 1 end, Batches)),
+    ?assert(meck:validate(Mod)),
+    ok.
+
+append_batch_reversed_batch_ignored(Config) ->
+    Mod = ?config(mod, Config),
+    Self = self(),
+    meck:new(Mod, [non_strict]),
+    meck:expect(Mod, init, fun(_) -> {ok, #{}} end),
+    meck:expect(Mod, append_batch,
+                fun({cast, Val}, init_batch) ->
+                        [Val];
+                   ({cast, Val}, Acc) ->
+                        Acc ++ [Val]
+                end),
+    meck:expect(Mod, handle_batch,
+                fun(Batch, State) ->
+                        Self ! {batch, Batch},
+                        {ok, State}
+                end),
+    Opts = [{reversed_batch, true}],
+    {ok, Pid} = gen_batch_server:start_link(undefined, Mod, [], Opts),
+    gen_batch_server:cast(Pid, block),
+    timer:sleep(50),
+    gen_batch_server:cast(Pid, 1),
+    gen_batch_server:cast(Pid, 2),
+    gen_batch_server:cast(Pid, 3),
+    %% discard the first batch (the block message)
+    receive {batch, _} -> ok after 2000 -> exit(timeout) end,
+    receive
+        {batch, Batch} ->
+            ?assertEqual([1, 2, 3], Batch)
+    after 2000 -> exit(timeout)
+    end,
+    ?assert(meck:validate(Mod)),
+    ok.
+
+append_batch_cast_batch(Config) ->
+    Mod = ?config(mod, Config),
+    Self = self(),
+    meck:new(Mod, [non_strict]),
+    meck:expect(Mod, init, fun(_) -> {ok, #{}} end),
+    meck:expect(Mod, append_batch,
+                fun({cast, Val}, init_batch) ->
+                        [Val];
+                   ({cast, Val}, Acc) ->
+                        Acc ++ [Val]
+                end),
+    meck:expect(Mod, handle_batch,
+                fun(Batch, State) ->
+                        Self ! {batch, Batch},
+                        {ok, State}
+                end),
+    {ok, Pid} = gen_batch_server:start_link(Mod, []),
+    gen_batch_server:cast_batch(Pid, [a, b, c]),
+    receive
+        {batch, Batch} ->
+            %% cast_batch_msg reverses the ops via foldl, then append_msg
+            %% reverses them back before fold_append walks them calling
+            %% append_batch in chronological order.
+            ?assertEqual([a, b, c], Batch)
+    after 2000 -> exit(timeout)
+    end,
+    ?assert(meck:validate(Mod)),
+    ok.
+
+collect_batches(0, Acc) ->
+    lists:reverse(Acc);
+collect_batches(N, Acc) ->
+    receive
+        {batch, Batch} -> collect_batches(N - 1, [Batch | Acc])
+    after 2000 -> exit(timeout)
+    end.
+
 %% Utility
 wait_batch() ->
     wait_batch([]).
@@ -810,3 +945,37 @@ wait_batch(Acc) ->
     after 5000 ->
               exit(timeout)
     end.
+%% Test for leftover ops handling
+%% This test verifies that when append_batch/2 returns {finish_batch, _} in the
+%% middle of a cast_batch message, the remaining ops are preserved and processed
+%% as a new batch rather than being dropped.
+append_batch_cast_batch_with_leftover(Config) ->
+    Mod = ?config(mod, Config),
+    Self = self(),
+    meck:new(Mod, [non_strict]),
+    meck:expect(Mod, init, fun(_) -> {ok, #{}} end),
+    meck:expect(Mod, append_batch,
+                fun({cast, 3}, Acc) ->
+                        {finish_batch, [3 | Acc]};  % Op 3 finishes batch, 4-5 become leftover
+                   ({cast, Val}, init_batch) ->
+                        [Val];
+                   ({cast, Val}, Acc) ->
+                        [Val | Acc]
+                end),
+    meck:expect(Mod, handle_batch,
+                fun(Batch, State) ->
+                        Self ! {batch, Batch},
+                        {ok, State}
+                end),
+    Opts = [{min_batch_size, 2}],
+    {ok, Pid} = gen_batch_server:start_link(undefined, Mod, [], Opts),
+    gen_batch_server:cast_batch(Pid, [1, 2, 3, 4, 5]),
+    %% Expect two batches:
+    %% 1. [3, 2, 1] - ops 1-3 (finished early by op 3)
+    %% 2. [5, 4] - ops 4-5 accumulate normally
+    Batches = collect_batches(2, []),
+    ?assertEqual(2, length(Batches)),
+    ?assertEqual([3, 2, 1], lists:nth(1, Batches)),
+    ?assertEqual([5, 4], lists:nth(2, Batches)),
+    ?assert(meck:validate(Mod)),
+    ok.

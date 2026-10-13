@@ -223,11 +223,12 @@ unavailable (e.g. when a Ra member runs out of disk space).
 #### Module:handle_batch(Batch, State) -> Result.
 
     Types:
-        Batch = [Op]
+        Batch = [Op] | OpaqueBatch
         UserOp = term(),
         Op = {cast, UserOp} |
              {call, from(), UserOp} |
              {info, UserOp}.
+        OpaqueBatch = term()
         Result = {ok, State} |
                  {ok, State, {continue, Continue}} |
                  {ok, Actions, State} |
@@ -241,6 +242,59 @@ unavailable (e.g. when a Ra member runs out of disk space).
 
 Called whenever a new batch is ready for processing. The implementation can
 optionally return a list of reply actions used to reply to `call` operations.
+
+When the module exports `append_batch/2`, `Batch` is the opaque term built by
+that callback instead of a list of `Op` tuples.
+
+#### Module:append_batch(Op, Batch) -> Result
+
+    Types:
+        Op = {cast, UserOp} |
+             {call, from(), UserOp} |
+             {info, UserOp}.
+        UserOp = term()
+        Batch = OpaqueBatch | init_batch
+        OpaqueBatch = term()
+        Result = OpaqueBatch | {finish_batch, OpaqueBatch}
+
+Optional. When exported, this callback is invoked for every incoming operation
+instead of the default behaviour of prepending it to a list. This turns the
+batch into an opaque term fully controlled by the implementation.
+
+`Batch` is the atom `init_batch` for the first operation in a new batch.
+Subsequent operations receive the value returned by the previous invocation.
+
+After each batch is processed by `handle_batch/2`, the batch state is reset to
+`init_batch` for the next batch to begin.
+
+Returning `{finish_batch, OpaqueBatch}` completes the batch immediately (even if
+the current batch size limit has not been reached) and passes `OpaqueBatch` to
+`handle_batch/2`. This is useful for domain-specific termination conditions
+(e.g. total byte size, entry count, or logical boundaries).
+
+When `cast_batch/2` is used with `append_batch/2`, each operation in the batch
+is passed through the callback individually in the order received. Any operation
+can trigger early batch completion by returning `{finish_batch, _}`.
+
+When this callback is exported the `reversed_batch` option has no effect.
+
+Example: Building a size-limited batch accumulator:
+
+    append_batch(Op, init_batch) ->
+        #{size => op_size(Op), ops => [Op]};
+    append_batch(Op, Acc = #{size := Size, ops := Ops}) ->
+        OpSize = op_size(Op),
+        NewSize = Size + OpSize,
+        case NewSize > 1_000_000 of
+            true ->
+                {finish_batch, Acc};  % Batch is full, finish now
+            false ->
+                Acc#{size => NewSize, ops => [Op | Ops]}
+        end.
+    
+    op_size({cast, Data}) -> byte_size(term_to_binary(Data));
+    op_size({call, _, Data}) -> byte_size(term_to_binary(Data));
+    op_size({info, Data}) -> byte_size(term_to_binary(Data)).
 
 #### Module:handle_continue(Continue, State) -> Result
 
